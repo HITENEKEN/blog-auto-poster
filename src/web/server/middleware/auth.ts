@@ -26,14 +26,12 @@ export async function authMiddleware(app: FastifyInstance): Promise<void> {
 
   // Add hook to verify JWT on protected routes
   app.addHook('preHandler', async (request: FastifyRequest, reply: FastifyReply) => {
-    // Skip auth for public routes
     if (isPublicRoute(request.url)) {
       return;
     }
 
     try {
       await request.jwtVerify();
-      // User is attached to request.user by fastify-jwt
     } catch (error) {
       return reply.code(401).send({
         error: 'Unauthorized',
@@ -42,15 +40,12 @@ export async function authMiddleware(app: FastifyInstance): Promise<void> {
     }
   });
 
-  // Login endpoint
+  // Login endpoint - credentials hardcoded for single-admin setup
   app.post('/api/auth/login', async (request: FastifyRequest, reply: FastifyReply) => {
     const { username, password } = request.body as { username: string; password: string };
 
-    // In production, verify against hashed password in database
-    // For now, use config-based admin credentials
-    const configManager = app.configManager;
-    const adminUser = configManager.get<string>('web.adminUsername', 'admin');
-    const adminPass = configManager.get<string>('web.adminPassword', 'changeme');
+    const adminUser = process.env.BLOG_POSTER_WEB_ADMIN_USERNAME || 'admin';
+    const adminPass = process.env.BLOG_POSTER_WEB_ADMIN_PASSWORD || 'changeme';
 
     if (username === adminUser && password === adminPass) {
       const token = app.jwt.sign({
@@ -76,9 +71,9 @@ export async function authMiddleware(app: FastifyInstance): Promise<void> {
     try {
       await request.jwtVerify();
       const token = app.jwt.sign({
-        userId: request.user!.userId,
-        username: request.user!.username,
-        role: request.user!.role,
+        userId: request.user.userId,
+        username: request.user.username,
+        role: request.user.role,
       });
       return reply.send({ token });
     } catch {
@@ -97,7 +92,7 @@ function isPublicRoute(url: string): boolean {
     '/health',
     '/api/auth/login',
     '/api/auth/refresh',
-    '/ws', // WebSocket handled separately
+    '/ws',
   ];
 
   return publicRoutes.some(route => url.startsWith(route)) || url.startsWith('/static/') || url === '/';
