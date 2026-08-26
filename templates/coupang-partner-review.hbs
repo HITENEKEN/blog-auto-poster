@@ -1,0 +1,178 @@
+---
+name: "coupang-partner-review"
+platforms: ["naver-blog", "tistory", "wordpress"]
+requiredFields:
+  - "productName"
+  - "price"
+  - "pros"
+  - "cons"
+  - "affiliateUrl"
+optionalFields:
+  - "originalPrice"
+  - "discountRate"
+  - "rating"
+  - "reviewCount"
+  - "imageUrl"
+  - "brand"
+  - "categoryName"
+  - "description"
+  - "specs"
+  - "comparisonTable"
+  - "faqList"
+  - "targetAudience"
+  - "oneLineReview"
+seo:
+  titleTemplate: "{{productName}} 솔직 리뷰 - 장단점 총정리 {{currentYear}}"
+  descriptionTemplate: "{{productName}} 실사용 후기. 가격 {{price}}원{{#if discountRate}}, {{discountRate}}% 할인 중{{/if}}. 장점과 단점을 균형있게 정리했습니다."
+  keywords: ["{{productName}} 추천", "{{productName}} 리뷰", "{{productName}} 가격", "{{productName}} 후기", "{{categoryName}}"]
+jsonLd:
+  type: "Product"
+  includeReview: true
+  includeAggregateRating: true
+---
+
+<div class="cpr-wrap">
+<style>
+.cpr-wrap{max-width:760px;margin:0 auto;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI','Noto Sans KR',sans-serif;line-height:1.8;color:#333;padding:16px}
+.cpr-summary{background:#f8f9fa;border-left:4px solid #343a40;padding:14px 18px;border-radius:6px;margin-bottom:24px;font-size:15px;color:#495057}
+.cpr-summary strong{color:#212529}
+.cpr-header h1{font-size:1.6rem;line-height:1.4;margin:0 0 8px;color:#212529}
+.cpr-meta{font-size:.85rem;color:#868e96;margin-bottom:20px}
+.cpr-meta span{margin-right:12px}
+.cpr-price-card{background:#fff;border:2px solid #e03131;border-radius:10px;padding:20px;text-align:center;margin-bottom:28px}
+.cpr-price{font-size:1.8rem;font-weight:700;color:#e03131}
+.cpr-original{font-size:1rem;color:#adb5bd;text-decoration:line-through;margin-left:8px}
+.cpr-discount{display:inline-block;background:#e03131;color:#fff;padding:2px 10px;border-radius:12px;font-size:.85rem;font-weight:600;margin-left:8px;vertical-align:middle}
+.cpr-cta-primary{display:block;background:#e03131;color:#fff;text-align:center;padding:14px;border-radius:8px;text-decoration:none;font-size:1.1rem;font-weight:700;margin-top:14px;transition:opacity .2s}
+.cpr-cta-primary:hover{opacity:.88}
+.cpr-section{margin-bottom:32px}
+.cpr-section h2{font-size:1.25rem;color:#212529;border-bottom:2px solid #e03131;padding-bottom:8px;margin-bottom:16px}
+.cpr-section h3{font-size:1.05rem;color:#495057;margin:18px 0 10px}
+.cpr-pctable{width:100%;border-collapse:collapse;margin-bottom:24px}
+.cpr-pctable th{padding:12px;font-size:1rem;text-align:center}
+.cpr-pctable th:first-child{color:#2b8a3e;background:#ebfbee;border-radius:8px 0 0 0}
+.cpr-pctable th:last-child{color:#c92a2a;background:#fff5f5;border-radius:0 8px 0 0}
+.cpr-pctable td{padding:12px 14px;vertical-align:top;border:1px solid #dee2e6;width:50%}
+.cpr-pctable ul{margin:0;padding-left:18px}
+.cpr-pctable li{margin-bottom:6px;font-size:.95rem}
+.cpr-img{max-width:100%;border-radius:8px;display:block;margin:12px auto}
+.cpr-specs{width:100%;border-collapse:collapse}
+.cpr-specs th{background:#f8f9fa;padding:10px 12px;text-align:left;font-weight:600;border:1px solid #dee2e6;width:35%}
+.cpr-specs td{padding:10px 12px;border:1px solid #dee2e6}
+.cpr-compare{width:100%;border-collapse:collapse;margin-bottom:16px}
+.cpr-compare th{background:#212529;color:#fff;padding:10px;font-size:.9rem}
+.cpr-compare td{padding:10px 12px;border:1px solid #dee2e6;font-size:.9rem}
+.cpr-faq{margin-bottom:12px}
+.cpr-faq-q{font-weight:600;color:#212529;margin-bottom:6px}
+.cpr-faq-a{color:#495057;font-size:.95rem}
+.cpr-audience li{margin-bottom:8px;font-size:.95rem}
+.cpr-final{text-align:center;margin:32px 0;padding:24px;background:#fff5f5;border-radius:10px}
+.cpr-cta-large{display:inline-block;background:#e03131;color:#fff;padding:16px 36px;border-radius:10px;text-decoration:none;font-size:1.15rem;font-weight:700}
+.cpr-cta-large:hover{opacity:.88}
+.cpr-notice{margin-top:28px;padding-top:16px;border-top:1px solid #eee}
+.cpr-notice small{color:#adb5bd;font-size:.78rem}
+@media(max-width:600px){.cpr-wrap{padding:10px}.cpr-header h1{font-size:1.3rem}.cpr-price{font-size:1.4rem}.cpr-pctable th,.cpr-pctable td{font-size:.85rem}}
+</style>
+
+<!-- ① 핵심 요약 -->
+<div class="cpr-summary">
+<strong>한 줄 평:</strong> {{oneLineReview}}
+</div>
+
+<!-- ② 제품 헤더 -->
+<div class="cpr-header">
+<h1>{{productName}} 솔직 리뷰</h1>
+<p class="cpr-meta">
+{{#if categoryName}}<span>📂 {{categoryName}}</span>{{/if}}
+{{#if brand}}<span>🏷️ {{brand}}</span>{{/if}}
+{{#if rating}}<span>⭐ {{renderStars rating}} ({{reviewCount}}개 리뷰)</span>{{/if}}
+</p>
+</div>
+
+{{#if imageUrl}}
+<img src="{{imageUrl}}" alt="{{productName}}" class="cpr-img" loading="lazy" />
+{{/if}}
+
+<!-- ③ 가격 정보 + CTA -->
+<div class="cpr-price-card">
+<span class="cpr-price">{{formatPrice price}}원</span>
+{{#if originalPrice}}<span class="cpr-original">{{formatPrice originalPrice}}원</span>{{/if}}
+{{#if discountRate}}<span class="cpr-discount">{{discountRate}}% OFF</span>{{/if}}
+<a href="{{affiliateUrl}}" target="_blank" rel="nofollow sponsored" class="cpr-cta-primary">💰 최저가 확인하기</a>
+</div>
+
+<!-- ④ 장단점 표 -->
+<table class="cpr-pctable">
+<tr><th>✅ 장점</th><th>❌ 단점</th></tr>
+<tr>
+<td><ul>{{#each pros}}<li>{{this}}</li>{{/each}}</ul></td>
+<td><ul>{{#each cons}}<li>{{this}}</li>{{/each}}</ul></td>
+</tr>
+</table>
+
+<!-- ⑤ 상세 리뷰 -->
+<div class="cpr-section">
+<h2>상세 리뷰</h2>
+{{#if description}}
+<h3>제품 소개</h3>
+<p>{{description}}</p>
+{{/if}}
+{{#if specs}}
+<h3>주요 스펙</h3>
+<table class="cpr-specs">
+{{#each specs}}
+<tr><th>{{@key}}</th><td>{{this}}</td></tr>
+{{/each}}
+</table>
+{{/if}}
+</div>
+
+<!-- ⑥ 비교 표 -->
+{{#if comparisonTable}}
+<div class="cpr-section">
+<h2>경쟁 제품과 비교</h2>
+<table class="cpr-compare">
+<tr><th>항목</th>{{#each comparisonTable.columns}}<th>{{this}}</th>{{/each}}</tr>
+{{#each comparisonTable.rows}}
+<tr><td>{{this.label}}</td>{{#each this.values}}<td>{{this}}</td>{{/each}}</tr>
+{{/each}}
+</table>
+</div>
+{{/if}}
+
+<!-- ⑦ 추천 대상 -->
+{{#if targetAudience}}
+<div class="cpr-section">
+<h2>이런 분께 추천합니다</h2>
+<ul class="cpr-audience">
+{{#each targetAudience}}<li>{{this}}</li>{{/each}}
+</ul>
+</div>
+{{/if}}
+
+<!-- ⑧ FAQ -->
+{{#if faqList}}
+<div class="cpr-section">
+<h2>자주 묻는 질문</h2>
+{{#each faqList}}
+<div class="cpr-faq">
+<p class="cpr-faq-q">Q. {{this.question}}</p>
+<p class="cpr-faq-a">A. {{this.answer}}</p>
+</div>
+{{/each}}
+</div>
+{{/if}}
+
+<!-- ⑨ 최종 CTA -->
+<div class="cpr-final">
+<p style="margin:0 0 12px;font-weight:600;">지금 최저가를 확인하세요 👇</p>
+<a href="{{affiliateUrl}}" target="_blank" rel="nofollow sponsored" class="cpr-cta-large">
+🛒 {{productName}} 최저가 보러가기
+</a>
+</div>
+
+<!-- ⑩ 파트너스 고지 -->
+<div class="cpr-notice">
+<small>※ 이 포스팅은 쿠팡 파트너스 활동의 일환으로, 이에 따른 일정액의 수수료를 제공받습니다.</small>
+</div>
+</div>

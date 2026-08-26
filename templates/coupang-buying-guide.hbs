@@ -1,0 +1,128 @@
+---
+name: "coupang-buying-guide"
+platforms: ["naver-blog", "tistory", "wordpress"]
+requiredFields:
+  - "categoryName"
+  - "checklist"
+optionalFields:
+  - "intro"
+  - "budgetSteps"
+  - "topPick"
+  - "mistakesToAvoid"
+  - "faqList"
+seo:
+  titleTemplate: "{{categoryName}} 고르는 법 - 초보를 위한 완벽 가이드 {{currentYear}}"
+  descriptionTemplate: "{{categoryName}} 처음 사나요? 체크리스트와 예산별 추천으로 실패 없는 선택을 도와드립니다."
+  keywords: ["{{categoryName}} 고르는법", "{{categoryName}} 선택 가이드", "{{categoryName}} 초보", "{{categoryName}} 추천"]
+---
+
+<div class="cbg-wrap">
+<style>
+.cbg-wrap{max-width:760px;margin:0 auto;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI','Noto Sans KR',sans-serif;line-height:1.8;color:#333;padding:16px}
+.cbg-header h1{font-size:1.5rem;line-height:1.4;margin:0 0 8px;color:#212529}
+.cbg-sub{color:#868e96;font-size:.9rem;margin-bottom:20px}
+.cbg-section{margin-bottom:32px}
+.cbg-section h2{font-size:1.25rem;border-bottom:2px solid #7048e8;padding-bottom:8px;margin-bottom:16px}
+.cbg-section h3{font-size:1.05rem;color:#495057;margin:18px 0 10px}
+.cbg-intro{background:#f3f0ff;border-left:4px solid #7048e8;padding:14px 18px;border-radius:6px;margin-bottom:24px;font-size:15px;color:#495057}
+.cbg-checklist{list-style:none;padding:0;counter-reset:check}
+.cbg-checklist li{counter-increment:check;margin-bottom:14px;padding-left:44px;position:relative}
+.cbg-checklist li::before{content:'✓';position:absolute;left:0;top:2px;width:30px;height:30px;background:#7048e8;color:#fff;border-radius:50%;display:flex;align-items:center;justify-content:center;font-weight:700;font-size:14px}
+.cbg-checklist li strong{display:block;color:#212529;margin-bottom:2px}
+.cbg-budget{background:#fff;border:1px solid #dee2e6;border-radius:10px;overflow:hidden;margin-bottom:14px}
+.cbg-budget-range{background:#7048e8;color:#fff;padding:8px 16px;font-weight:600;font-size:.95rem}
+.cbg-budget-body{padding:14px 16px}
+.cbg-pick{font-weight:700;font-size:1.05rem;color:#212529;margin-bottom:6px}
+.cbg-reason{font-size:.93rem;color:#495057;margin-bottom:10px}
+.cbg-cta-sm{display:inline-block;background:#7048e8;color:#fff;padding:9px 22px;border-radius:6px;text-decoration:none;font-size:.92rem;font-weight:600}
+.cbg-cta-sm:hover{opacity:.88}
+.cbg-mistake{border-left:3px solid #e03131;padding:10px 14px;background:#fff5f5;border-radius:0 6px 6px 0;margin-bottom:12px}
+.cbg-mistake-title{font-weight:600;color:#c92a2a;font-size:.95rem;margin-bottom:4px}
+.cbg-mistake-desc{font-size:.9rem;color:#495057}
+.cbg-faq-q{font-weight:600;margin-bottom:4px}
+.cbg-faq-a{color:#495057;font-size:.93rem;margin-bottom:14px}
+.cbg-final{text-align:center;margin:32px 0;padding:22px;background:#f3f0ff;border-radius:10px}
+.cbg-notice{margin-top:28px;padding-top:14px;border-top:1px solid #eee}
+.cbg-notice small{color:#adb5bd;font-size:.78rem}
+@media(max-width:600px){.cbg-header h1{font-size:1.25rem}}
+</style>
+
+<!-- 헤더 -->
+<div class="cbg-header">
+<h1>{{categoryName}} 고르는 법 — 초보자 완벽 가이드</h1>
+<p class="cbg-sub">{{currentYear}}년 최신 · 체크리스트 + 예산별 추천</p>
+</div>
+
+<!-- 인트로 -->
+{{#if intro}}
+<div class="cbg-intro">{{intro}}</div>
+{{/if}}
+
+<!-- 체크리스트 -->
+<div class="cbg-section">
+<h2>구매 전 필수 체크리스트</h2>
+<ol class="cbg-checklist">
+{{#each checklist}}
+<li><strong>{{this.title}}</strong>{{this.description}}</li>
+{{/each}}
+</ol>
+</div>
+
+<!-- 예산별 추천 -->
+{{#if budgetSteps}}
+<div class="cbg-section">
+<h2>예산별 추천 제품</h2>
+{{#each budgetSteps}}
+<div class="cbg-budget">
+<div class="cbg-budget-range">💰 예산: ~{{this.range}}</div>
+<div class="cbg-budget-body">
+<p class="cbg-pick">{{this.productName}}</p>
+<p class="cbg-reason">{{this.reason}}</p>
+<a href="{{this.affiliateUrl}}" target="_blank" rel="nofollow sponsored" class="cbg-cta-sm">🛒 가격 확인하기</a>
+</div>
+</div>
+{{/each}}
+</div>
+{{/if}}
+
+<!-- Top Pick -->
+{{#if topPick}}
+<div class="cbg-section">
+<h2>🏆 올해의 TOP PICK</h2>
+<div class="cbg-best" style="background:#f3f0ff;border:2px solid #7048e8;">
+<p style="font-size:1.15rem;font-weight:700;margin:0 0 8px;">{{topPick.productName}}</p>
+<p style="margin:0 0 12px;font-size:.95rem;color:#495057;">{{topPick.reason}}</p>
+<a href="{{topPick.affiliateUrl}}" target="_blank" rel="nofollow sponsored" class="cbg-cta-sm">🛒 최저가 확인하기</a>
+</div>
+</div>
+{{/if}}
+
+<!-- 실수 방지 -->
+{{#if mistakesToAvoid}}
+<div class="cbg-section">
+<h2>⚠️ 초보자가 자주 하는 실수</h2>
+{{#each mistakesToAvoid}}
+<div class="cbg-mistake">
+<div class="cbg-mistake-title">✕ {{this.title}}</div>
+<p class="cbg-mistake-desc" style="margin:0;">{{this.description}}</p>
+</div>
+{{/each}}
+</div>
+{{/if}}
+
+<!-- FAQ -->
+{{#if faqList}}
+<div class="cbg-section">
+<h2>자주 묻는 질문</h2>
+{{#each faqList}}
+<p class="cbg-faq-q">Q. {{this.question}}</p>
+<p class="cbg-faq-a">A. {{this.answer}}</p>
+{{/each}}
+</div>
+{{/if}}
+
+<!-- 파트너스 고지 -->
+<div class="cbg-notice">
+<small>※ 이 포스팅은 쿠팡 파트너스 활동의 일환으로, 이에 따른 일정액의 수수료를 제공받습니다.</small>
+</div>
+</div>

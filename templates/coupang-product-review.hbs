@@ -1,0 +1,243 @@
+---
+name: "coupang-product-review"
+platforms: ["tistory", "wordpress"]
+requiredFields:
+  - "productName"
+  - "price"
+  - "pros"
+  - "cons"
+  - "affiliateUrl"
+optionalFields:
+  - "originalPrice"
+  - "discountRate"
+  - "rating"
+  - "reviewCount"
+  - "imageUrl"
+  - "brand"
+  - "categoryName"
+  - "description"
+  - "specs"
+seo:
+  titleTemplate: "{{productName}} 리뷰 - 장단점 총정리 (2024)"
+  descriptionTemplate: "{{productName}} 구매 전 꼭 확인하세요. 가격 {{price}}원, {{#if originalPrice}}정가 {{originalPrice}}원 ({{discountRate}}% 할인){{/if}}. 장점: {{#each pros}}{{this}}{{#unless @last}}, {{/unless}}{{/each}}. 단점: {{#each cons}}{{this}}{{#unless @last}}, {{/unless}}{{/each}}."
+  keywords: ["{{productName}}", "리뷰", "추천", "가성비", "후기", "{{categoryName}}"]
+jsonLd:
+  type: "Product"
+  includeReview: true
+  includeAggregateRating: true
+---
+
+<div class="coupang-product-review">
+  <!-- Product Header -->
+  <div class="product-header">
+    {{#if imageUrl}}
+    <figure class="product-image">
+      <img src="{{imageUrl}}" alt="{{productName}} 제품 이미지" loading="lazy" />
+    </figure>
+    {{/if}}
+    <div class="product-info">
+      <h1>{{productName}}</h1>
+      {{#if brand}}
+      <p class="brand">{{brand}}</p>
+      {{/if}}
+      {{#if categoryName}}
+      <p class="category">{{categoryName}}</p>
+      {{/if}}
+      <div class="price-section">
+        <span class="current-price">{{formatPrice price}}원</span>
+        {{#if originalPrice}}
+        <span class="original-price">{{formatPrice originalPrice}}원</span>
+        <span class="discount-badge">{{discountRate}}% 할인</span>
+        {{/if}}
+      </div>
+      {{#if rating}}
+      <div class="rating">
+        <span class="stars">{{renderStars rating}}</span>
+        <span class="review-count">({{reviewCount}}개 리뷰)</span>
+      </div>
+      {{/if}}
+      <div class="cta-button-wrapper">
+        <a href="{{affiliateUrl}}" target="_blank" rel="nofollow sponsored" class="cta-button">
+          최저가 확인하기 →
+        </a>
+      </div>
+    </div>
+  </div>
+
+  <!-- Quick Summary -->
+  <section class="quick-summary">
+    <h2>한눈에 보는 요약</h2>
+    <div class="summary-grid">
+      <div class="summary-item pros">
+        <h3>✅ 장점</h3>
+        <ul>
+          {{#each pros}}
+          <li>{{this}}</li>
+          {{/each}}
+        </ul>
+      </div>
+      <div class="summary-item cons">
+        <h3>❌ 단점</h3>
+        <ul>
+          {{#each cons}}
+          <li>{{this}}</li>
+          {{/each}}
+        </ul>
+      </div>
+    </div>
+  </section>
+
+  <!-- Detailed Review -->
+  <section class="detailed-review">
+    <h2>상세 리뷰</h2>
+    
+    {{#if description}}
+    <div class="description">
+      <h3>제품 설명</h3>
+      <p>{{description}}</p>
+    </div>
+    {{/if}}
+
+    {{#if specs}}
+    <div class="specs">
+      <h3>주요 스펙</h3>
+      <table>
+        <thead>
+          <tr><th>항목</th><th>내용</th></tr>
+        </thead>
+        <tbody>
+          {{#each specs}}
+          <tr><td>{{@key}}</td><td>{{this}}</td></tr>
+          {{/each}}
+        </tbody>
+      </table>
+    </div>
+    {{/if}}
+
+    <div class="pros-section">
+      <h3>장점 상세</h3>
+      <ul>
+        {{#each pros}}
+        <li>{{this}}</li>
+        {{/each}}
+      </ul>
+    </div>
+
+    <div class="cons-section">
+      <h3>단점 상세</h3>
+      <ul>
+        {{#each cons}}
+        <li>{{this}}</li>
+        {{/each}}
+      </ul>
+    </div>
+  </section>
+
+  <!-- Purchase Guide -->
+  <section class="purchase-guide">
+    <h2>구매 가이드</h2>
+    <p>
+      {{productName}}은(는) {{#if discountRate}}현재 {{discountRate}}% 할인된 {{formatPrice price}}원에 구매 가능합니다.{{else}}{{formatPrice price}}원에 판매 중입니다.{{/if}}
+      {{#if originalPrice}}정가 {{formatPrice originalPrice}}원에서 할인된 가격입니다.{{/if}}
+    </p>
+    <div class="purchase-cta">
+      <a href="{{affiliateUrl}}" target="_blank" rel="nofollow sponsored" class="purchase-button">
+        🛒 쿠팡에서 최저가 확인하기
+      </a>
+    </div>
+    <p class="disclaimer">
+      <small>
+        ※ 이 링크는 쿠팡 파트너스 활동의 일환으로, 이에 따른 일정액의 수수료를 제공받습니다.
+      </small>
+    </p>
+  </section>
+
+  <!-- Related Products Placeholder -->
+  <section class="related-products">
+    <h2>함께 보면 좋은 제품</h2>
+    <p>관련 제품 추천 영역입니다. (향후 구현 예정)</p>
+  </section>
+</div>
+
+<style>
+.coupang-product-review {
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+  line-height: 1.7;
+  color: #333;
+  max-width: 800px;
+  margin: 0 auto;
+  padding: 20px;
+}
+.product-header {
+  display: flex;
+  gap: 24px;
+  margin-bottom: 32px;
+  padding-bottom: 24px;
+  border-bottom: 1px solid #eee;
+}
+.product-image img {
+  max-width: 200px;
+  border-radius: 8px;
+  box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+}
+.product-info h1 {
+  font-size: 1.8rem;
+  margin: 0 0 8px;
+  color: #1a1a1a;
+}
+.brand { color: #666; font-size: 1rem; margin: 0 0 4px; }
+.category { color: #888; font-size: 0.9rem; margin: 0 0 16px; }
+.price-section { display: flex; align-items: baseline; gap: 12px; margin: 16px 0; }
+.current-price { font-size: 1.5rem; font-weight: 700; color: #e53935; }
+.original-price { font-size: 1rem; color: #999; text-decoration: line-through; }
+.discount-badge { background: #e53935; color: white; padding: 2px 8px; border-radius: 4px; font-size: 0.85rem; font-weight: 600; }
+.rating { display: flex; align-items: center; gap: 8px; margin: 12px 0; }
+.cta-button-wrapper { margin-top: 16px; }
+.cta-button {
+  display: inline-block;
+  background: #e53935;
+  color: white;
+  padding: 14px 28px;
+  border-radius: 6px;
+  text-decoration: none;
+  font-weight: 600;
+  font-size: 1.1rem;
+  transition: background 0.2s;
+}
+.cta-button:hover { background: #c62828; }
+.quick-summary { margin: 32px 0; padding: 20px; background: #fafafa; border-radius: 8px; }
+.summary-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 24px; }
+.summary-item h3 { font-size: 1.1rem; margin: 0 0 12px; }
+.summary-item.pros h3 { color: #2e7d32; }
+.summary-item.cons h3 { color: #c62828; }
+.summary-item ul { margin: 0; padding-left: 20px; }
+.summary-item li { margin: 8px 0; }
+.detailed-review { margin: 32px 0; }
+.detailed-review h2 { font-size: 1.5rem; margin-bottom: 16px; padding-bottom: 8px; border-bottom: 2px solid #e53935; }
+.detailed-review h3 { font-size: 1.2rem; color: #333; margin-top: 24px; }
+.description p { color: #555; }
+.specs table { width: 100%; border-collapse: collapse; margin: 12px 0; }
+.specs th, .specs td { padding: 10px 12px; border: 1px solid #ddd; text-align: left; }
+.specs th { background: #f5f5f5; font-weight: 600; }
+.purchase-guide { margin: 32px 0; padding: 24px; background: #fff8f8; border-radius: 8px; border: 1px solid #ffebee; }
+.purchase-guide h2 { font-size: 1.4rem; margin: 0 0 16px; color: #c62828; }
+.purchase-button {
+  display: inline-block;
+  background: #2e7d32;
+  color: white;
+  padding: 16px 32px;
+  border-radius: 6px;
+  text-decoration: none;
+  font-weight: 700;
+  font-size: 1.1rem;
+  margin: 16px 0;
+  transition: background 0.2s;
+}
+.purchase-button:hover { background: #1b5e20; }
+.disclaimer { margin-top: 16px; color: #888; font-size: 0.85rem; }
+.related-products { margin-top: 40px; padding-top: 24px; border-top: 1px solid #eee; color: #888; }
+@media (max-width: 600px) {
+  .product-header { flex-direction: column; }
+  .summary-grid { grid-template-columns: 1fr; }
+}
+</style>

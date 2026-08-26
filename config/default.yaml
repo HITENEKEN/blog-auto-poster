@@ -1,0 +1,163 @@
+# Blog Auto Poster - Default Configuration
+# This file contains all default settings. Override with config/local.yaml or environment variables.
+
+app:
+  name: "blog-auto-poster"
+  version: "1.0.0"
+  env: "development"
+  logLevel: "info"
+  dataDir: "./data"
+  outputDir: "./output"
+  cacheDir: "./.cache"
+
+# Affiliate network configurations
+affiliates:
+  coupang:
+    enabled: true
+    apiKey: ""  # Set via environment variable BLOG_POSTER_AFFILIATES_COUPANG_API_KEY
+    apiSecret: ""  # Set via environment variable BLOG_POSTER_AFFILIATES_COUPANG_API_SECRET
+    accessToken: ""  # Auto-managed
+    refreshToken: ""  # Auto-managed
+    tokenExpiresAt: 0  # Auto-managed
+    trackingId: ""  # Your Coupang tracking ID (subId)
+    rateLimit:
+      requestsPerMinute: 100
+
+# Blog platform configurations
+platforms:
+  tistory:
+    enabled: false
+    blogName: ""
+    username: ""  # Set via environment variable BLOG_POSTER_PLATFORMS_TISTORY_USERNAME
+    password: ""  # Set via environment variable BLOG_POSTER_PLATFORMS_TISTORY_PASSWORD
+    apiKey: ""  # Set via environment variable BLOG_POSTER_PLATFORMS_TISTORY_API_KEY
+    accessToken: ""  # Auto-managed via session
+    rateLimit:
+      requestsPerMinute: 30
+
+  wordpress:
+    enabled: false
+    url: ""
+    username: ""  # Set via environment variable BLOG_POSTER_PLATFORMS_WORDPRESS_USERNAME
+    appPassword: ""  # Set via environment variable BLOG_POSTER_PLATFORMS_WORDPRESS_APP_PASSWORD
+    rateLimit:
+      requestsPerMinute: 60
+
+  youtube-shorts:
+    enabled: false
+    clientId: ""  # Set via environment variable BLOG_POSTER_PLATFORMS_YOUTUBE_CLIENT_ID
+    clientSecret: ""  # Set via environment variable BLOG_POSTER_PLATFORMS_YOUTUBE_CLIENT_SECRET
+    refreshToken: ""  # Auto-managed
+    accessToken: ""  # Auto-managed
+    channelId: ""
+    rateLimit:
+      requestsPerMinute: 50
+
+# AI Image generation providers
+imageProviders:
+  dalle:
+    enabled: false
+    apiKey: ""  # Set via environment variable BLOG_POSTER_IMAGE_PROVIDERS_DALLE_API_KEY
+    model: "dall-e-3"
+    defaultStyle: "vivid"
+    defaultQuality: "hd"
+    defaultSize: "1024x1024"
+
+  stable-diffusion:
+    enabled: false
+    apiUrl: "https://api.stability.ai"
+    apiKey: ""  # Set via environment variable BLOG_POSTER_IMAGE_PROVIDERS_STABLE_DIFFUSION_API_KEY
+    defaultEngine: "stable-diffusion-xl-1024-v1-0"
+
+  gemini:
+    enabled: false
+    apiKey: ""  # Set via environment variable BLOG_POSTER_IMAGE_PROVIDERS_GEMINI_API_KEY
+    model: "gemini-1.5-pro"
+
+# Keyword research providers
+keywordProviders:
+  naver:
+    enabled: false
+    clientId: ""  # Set via environment variable BLOG_POSTER_KEYWORD_PROVIDERS_NAVER_CLIENT_ID
+    clientSecret: ""  # Set via environment variable BLOG_POSTER_KEYWORD_PROVIDERS_NAVER_CLIENT_SECRET
+
+  google-trends:
+    enabled: true
+    useSerpApi: false
+    serpApiKey: ""  # Set via environment variable BLOG_POSTER_KEYWORD_PROVIDERS_GOOGLE_TRENDS_SERP_API_KEY
+
+  coupang:
+    enabled: true
+
+# Scheduler configuration
+scheduler:
+  enabled: false
+  timezone: "Asia/Seoul"
+  jobs:
+    - name: "daily-keyword-research"
+      type: "RESEARCH"
+      cron: "0 6 * * *"  # Daily at 06:00
+      enabled: true
+      config:
+        seedKeywords: ["무선청소기", "로봇청소기", "공기청정기", "가습기"]
+        limit: 20
+
+    - name: "daily-content-generation"
+      type: "GENERATE"
+      cron: "0 7 * * *"  # Daily at 07:00
+      enabled: true
+      config:
+        maxPostsPerRun: 5
+        template: "coupang-product-review"
+        platforms: ["tistory"]
+
+    - name: "daily-publishing"
+      type: "PUBLISH"
+      cron: "0 8 * * *"  # Daily at 08:00
+      enabled: true
+      config:
+        platforms: ["tistory"]
+        maxPostsPerRun: 5
+
+    - name: "hourly-analytics-sync"
+      type: "SYNC_ANALYTICS"
+      cron: "0 * * * *"  # Hourly
+      enabled: true
+      config:
+        platforms: ["tistory"]
+        affiliates: ["coupang"]
+
+# Job queue configuration
+jobQueue:
+  dbPath: "./data/jobs.sqlite"
+  maxConcurrentJobs: 3
+  defaultRetryAttempts: 3
+  defaultRetryDelayMs: 5000
+  deadLetterAfterAttempts: 5
+
+# Template configuration
+templates:
+  dir: "./templates"
+  defaultTemplate: "coupang-product-review"
+  validation: true
+
+# SEO defaults
+seo:
+  defaultTitleTemplate: "{{productName}} 리뷰 - 장단점 총정리"
+  defaultDescriptionTemplate: "{{productName}} 구매 전 꼭 확인하세요. 가격 {{price}}원, 장점/단점 분석."
+  defaultKeywords: ["리뷰", "추천", "가성비", "후기"]
+  jsonLd: true
+
+# Web dashboard configuration
+web:
+  enabled: false
+  host: "0.0.0.0"
+  port: 3000
+  jwtSecret: ""  # Set via environment variable BLOG_POSTER_WEB_JWT_SECRET
+  jwtExpiresIn: "7d"
+  cors:
+    origin: "*"
+    credentials: true
+  rateLimit:
+    windowMs: 900000  # 15 minutes
+    maxRequests: 100

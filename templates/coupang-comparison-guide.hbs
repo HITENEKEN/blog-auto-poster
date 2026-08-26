@@ -1,0 +1,144 @@
+---
+name: "coupang-comparison-guide"
+platforms: ["naver-blog", "tistory", "wordpress"]
+requiredFields:
+  - "categoryName"
+  - "products"
+  - "comparisonTable"
+optionalFields:
+  - "budgetRanges"
+  - "recommendations"
+  - "faqList"
+seo:
+  titleTemplate: "{{categoryName}} BEST {{productCount}} 비교 추천 {{currentYear}}"
+  descriptionTemplate: "{{categoryName}} 구매 전 필독! 인기 제품 {{productCount}}개를 가격/성능/리뷰로 비교 분석했습니다."
+  keywords: ["{{categoryName}} 추천", "{{categoryName}} 비교", "{{categoryName}} 순위", "{{categoryName}} 가격비교"]
+jsonLd:
+  type: "ItemList"
+---
+
+<div class="ccg-wrap">
+<style>
+.ccg-wrap{max-width:760px;margin:0 auto;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI','Noto Sans KR',sans-serif;line-height:1.8;color:#333;padding:16px}
+.ccg-header h1{font-size:1.5rem;line-height:1.4;margin:0 0 8px;color:#212529}
+.ccg-sub{color:#868e96;font-size:.9rem;margin-bottom:20px}
+.ccg-section{margin-bottom:32px}
+.ccg-section h2{font-size:1.25rem;border-bottom:2px solid #1971c2;padding-bottom:8px;margin-bottom:16px}
+.ccg-product-card{background:#fff;border:1px solid #dee2e6;border-radius:10px;overflow:hidden;margin-bottom:20px}
+.ccg-product-rank{background:#1971c2;color:#fff;display:inline-block;padding:4px 14px;font-weight:700;font-size:.9rem}
+.ccg-product-body{padding:18px}
+.ccg-product-name{font-size:1.15rem;font-weight:700;margin-bottom:6px}
+.ccg-product-price{font-size:1.3rem;font-weight:700;color:#e03131;margin:8px 0}
+.ccg-product-desc{font-size:.95rem;color:#495057;margin-bottom:12px}
+.ccg-pros-cons{display:flex;gap:12px;flex-wrap:wrap;margin-bottom:12px}
+.ccg-tag{display:inline-block;padding:3px 10px;border-radius:12px;font-size:.82rem}
+.ccg-tag.pro{background:#ebfbee;color:#2b8a3e}
+.ccg-tag.con{background:#fff5f5;color:#c92a2a}
+.ccg-cta{display:block;background:#1971c2;color:#fff;text-align:center;padding:11px;border-radius:6px;text-decoration:none;font-weight:600;font-size:.95rem}
+.ccg-cta:hover{opacity:.88}
+.ccg-table{width:100%;border-collapse:collapse;margin-bottom:20px}
+.ccg-table th{background:#f8f9fa;padding:10px 12px;border:1px solid #dee2e6;font-weight:600;text-align:center}
+.ccg-table td{padding:10px 12px;border:1px solid #dee2e6;font-size:.92rem;text-align:center}
+.ccg-table td:first-child{text-align:left;font-weight:500;background:#fafafa;width:25%}
+.ccg-best{background:#fff9db;border:2px solid #fab005;border-radius:10px;padding:16px 20px;margin:20px 0}
+.ccg-best-label{font-weight:700;color:#e67700;font-size:.95rem;margin-bottom:6px}
+.ccg-faq-q{font-weight:600;margin-bottom:4px}
+.ccg-faq-a{color:#495057;font-size:.93rem;margin-bottom:14px}
+.ccg-notice{margin-top:28px;padding-top:14px;border-top:1px solid #eee}
+.ccg-notice small{color:#adb5bd;font-size:.78rem}
+@media(max-width:600px){.ccg-header h1{font-size:1.25rem}.ccg-table{font-size:.82rem}.ccg-table th,.ccg-table td{padding:6px}}
+</style>
+
+<!-- 헤더 -->
+<div class="ccg-header">
+<h1>{{categoryName}} BEST{{productCount}} 비교 추천</h1>
+<p class="ccg-sub">{{currentYear}}년 기준 · 가격/성능/리뷰 종합 분석</p>
+</div>
+
+<!-- 요약 -->
+<div class="ccg-section">
+<p>{{categoryName}} 구매를 고민 중이라면 이 글 하나로 끝내세요.
+인기 제품 {{productCount}}개의 스펙, 장단점, 실사용 후기를 한눈에 비교해 드립니다.</p>
+</div>
+
+<!-- 전체 비교표 -->
+<div class="ccg-section">
+<h2>한눈에 보는 비교표</h2>
+<table class="ccg-table">
+<tr>
+<th>구분</th>
+{{#each products}}<th>{{this.name}}</th>{{/each}}
+</tr>
+{{#each comparisonTable.rows}}
+<tr>
+<td>{{this.label}}</td>
+{{#each this.values}}<td>{{this}}</td>{{/each}}
+</tr>
+{{/each}}
+</table>
+</div>
+
+<!-- 개별 제품 카드 -->
+{{#each products}}
+<div class="ccg-section">
+<div class="ccg-product-card">
+<span class="ccg-product-rank">{{math @index "+" 1}}위</span>
+<div class="ccg-product-body">
+<div class="ccg-product-name">{{this.name}}</div>
+{{#if this.brand}}<p style="margin:0;color:#868e96;font-size:.85rem;">{{this.brand}}</p>{{/if}}
+<div class="ccg-product-price">{{formatPrice this.price}}원</div>
+<p class="ccg-product-desc">{{this.description}}</p>
+<div class="ccg-pros-cons">
+{{#each this.pros}}<span class="ccg-tag pro">✅ {{this}}</span>{{/each}}
+{{#each this.cons}}<span class="ccg-tag con">❌ {{this}}</span>{{/each}}
+</div>
+<a href="{{this.affiliateUrl}}" target="_blank" rel="nofollow sponsored" class="ccg-cta">
+🛒 {{this.name}} 최저가 확인하기
+</a>
+</div>
+</div>
+</div>
+{{/each}}
+
+<!-- 예산별 추천 -->
+{{#if budgetRanges}}
+<div class="ccg-section">
+<h2>예산별 추천</h2>
+{{#each budgetRanges}}
+<div class="ccg-best">
+<div class="ccg-best-label">💰 ~{{this.range}}</div>
+<p style="margin:0"><strong>{{this.productName}}</strong> — {{this.reason}}</p>
+</div>
+{{/each}}
+</div>
+{{/if}}
+
+<!-- 최종 추천 -->
+{{#if recommendations}}
+<div class="ccg-section">
+<h2>최종 추천</h2>
+{{#each recommendations}}
+<div class="ccg-best">
+<div class="ccg-best-label">🏆 {{this.title}}</div>
+<p style="margin:0"><strong>{{this.productName}}</strong> — {{this.reason}}</p>
+</div>
+{{/each}}
+</div>
+{{/if}}
+
+<!-- FAQ -->
+{{#if faqList}}
+<div class="ccg-section">
+<h2>자주 묻는 질문</h2>
+{{#each faqList}}
+<p class="ccg-faq-q">Q. {{this.question}}</p>
+<p class="ccg-faq-a">A. {{this.answer}}</p>
+{{/each}}
+</div>
+{{/if}}
+
+<!-- 고지 -->
+<div class="ccg-notice">
+<small>※ 이 포스팅은 쿠팡 파트너스 활동의 일환으로, 이에 따른 일정액의 수수료를 제공받습니다.</small>
+</div>
+</div>

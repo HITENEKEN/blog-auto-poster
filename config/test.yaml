@@ -1,0 +1,83 @@
+# Blog Auto Poster - Test Configuration
+# Used for automated testing with sandbox credentials
+
+app:
+  name: "blog-auto-poster-test"
+  version: "1.0.0"
+  env: "test"
+  logLevel: "debug"
+  dataDir: "./test-data"
+  outputDir: "./test-output"
+  cacheDir: "./test-cache"
+
+affiliates:
+  coupang:
+    enabled: true
+    apiKey: "test-api-key"
+    apiSecret: "test-api-secret"
+    trackingId: "test-tracking-id"
+    rateLimit:
+      requestsPerMinute: 100
+
+platforms:
+  tistory:
+    enabled: true
+    blogName: "test-blog"
+    username: "test-user"
+    password: "test-pass"
+    apiKey: "test-api-key"
+    rateLimit:
+      requestsPerMinute: 30
+
+  wordpress:
+    enabled: false
+
+  youtube-shorts:
+    enabled: false
+
+imageProviders:
+  dalle:
+    enabled: false
+  stable-diffusion:
+    enabled: false
+  gemini:
+    enabled: false
+
+keywordProviders:
+  naver:
+    enabled: false
+  google-trends:
+    enabled: true
+    useSerpApi: false
+  coupang:
+    enabled: true
+
+scheduler:
+  enabled: false
+  timezone: "Asia/Seoul"
+  jobs: []
+
+jobQueue:
+  dbPath: "./test-data/jobs.sqlite"
+  maxConcurrentJobs: 1
+  defaultRetryAttempts: 1
+  defaultRetryDelayMs: 100
+  deadLetterAfterAttempts: 2
+
+templates:
+  dir: "./templates"
+  defaultTemplate: "coupang-product-review"
+  validation: true
+
+seo:
+  defaultTitleTemplate: "[TEST] {{productName}} 리뷰"
+  defaultDescriptionTemplate: "[TEST] {{productName}} 테스트용 포스트입니다."
+  defaultKeywords: ["테스트", "리뷰"]
+  jsonLd: true
+
+web:
+  enabled: false
+  host: "127.0.0.1"
+  port: 3001
+  jwtSecret: "test-jwt-secret-key-for-testing-only"
+  jwtExpiresIn: "1h"
