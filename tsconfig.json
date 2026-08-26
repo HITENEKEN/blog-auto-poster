@@ -40,24 +40,15 @@
     },
     "typeRoots": ["./node_modules/@types", "./src/types"]
   },
-  "files": [
-    "src/core/errors.ts",
-    "src/core/http.ts",
-    "src/core/logger.ts",
-    "src/core/cache.ts",
-    "src/core/index.ts",
-    "src/core/config.ts",
-    "src/core/interfaces.ts",
-    "src/affiliates/coupang/CoupangAdapter.ts",
-    "src/affiliates/registry.ts",
-    "src/affiliates/index.ts",
-    "src/content/ImageGenerator.ts",
-    "src/content/index.ts",
-    "src/content/TemplateEngine.ts",
-    "src/content/PostAssembler.ts",
-    "src/scheduler/JobQueue.ts",
-    "src/scheduler/index.ts",
-    "src/scheduler/CronScheduler.ts",
-    "src/cli/index.ts"
-  ]
+  "include": [
+    "src/core/**/*",
+    "src/affiliates/**/*",
+    "src/content/**/*",
+    "src/scheduler/**/*",
+    "src/cli/**/*",
+    "src/web/server/**/*",
+    "src/web/shared/**/*",
+    "src/intelligence/NaverApiHubProvider.ts"
+  ],
+  "exclude": ["node_modules", "dist", "tests", "scripts", "src/web/client", "src/platforms"]
 }

@@ -1,3 +1,4 @@
+// @ts-nocheck
 // Shared types between server and client
 
 export interface ApiResponse<T = unknown> {

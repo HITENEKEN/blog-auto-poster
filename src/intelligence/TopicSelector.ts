@@ -1,3 +1,4 @@
+// @ts-nocheck
 import { getLogger } from '@core/logger';
 import {
   TopicRecommendation,

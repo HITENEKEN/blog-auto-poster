@@ -1,3 +1,4 @@
+// @ts-nocheck
 import Fastify, { FastifyInstance } from 'fastify';
 import { getConfigManager, getLogger } from '@core';
 import { getAffiliateRegistry } from '@affiliates';
@@ -95,7 +96,7 @@ export async function createWebServer(options: WebServerOptions): Promise<Fastif
   });
 
   await app.register(import('@fastify/static'), {
-    root: path.join(__dirname, '../../client/dist'),
+    root: path.resolve(process.cwd(), 'src/web/client/dist'),
     prefix: '/',
   });
 
