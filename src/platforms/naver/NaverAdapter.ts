@@ -16,6 +16,7 @@ import {
   AuthenticationError,
   ValidationError,
 } from '@core/errors';
+import { postToNaverBlog, shouldUseBrowserMode } from './NaverBrowserPoster';
 
 const logger = getLogger('naver-adapter');
 
@@ -154,16 +155,58 @@ export class NaverAdapter implements PlatformAdapter {
     const clientSecret = String(cfg.clientSecret ?? '');
     const accessToken = cfg.accessToken != null ? String(cfg.accessToken) : '';
 
-    if (!blogId || !clientId || !clientSecret) {
+    if (!blogId) {
       throw new ConfigurationError(
-        'Naver blog posting is not configured. Set platforms.naver.blogId, clientId, and clientSecret in Settings.',
+        'Naver blog posting is not configured. Set platforms.naver.blogId in Settings.',
+        'naver',
+      );
+    }
+
+    // Headless-browser mode: no OpenAPI token needed, only a saved login session
+    // (npm run naver:login). Chosen explicitly via useBrowser=true or implicitly
+    // when no accessToken is configured. Create-only — updates keep the API path.
+    if (shouldUseBrowserMode(cfg)) {
+      try {
+        const result = await postToNaverBlog({
+          blogId,
+          title: content.title,
+          html: content.content,
+          tags: content.tags,
+          visibility: content.visibility === 'private' ? 'private' : 'public',
+          headless: true,
+        });
+        return { postId: result.postId, url: result.url, publishedAt: new Date() };
+      } catch (error) {
+        if (
+          error instanceof ConfigurationError ||
+          error instanceof PlatformError ||
+          error instanceof AuthenticationError ||
+          error instanceof ValidationError
+        ) {
+          throw error;
+        }
+        logger.error({ error: String(error) }, 'Naver browser createPost failed');
+        throw new PlatformError(
+          `Naver browser createPost failed: ${String(error)}`,
+          'naver',
+          'createPost',
+          502,
+          false,
+          { originalError: String(error) },
+        );
+      }
+    }
+
+    if (!clientId || !clientSecret) {
+      throw new ConfigurationError(
+        'Naver blog posting is not configured. Set platforms.naver.clientId and clientSecret in Settings.',
         'naver',
       );
     }
     if (!accessToken) {
       throw new ConfigurationError(
         'Naver blog posting requires an access token (Naver Login OAuth with blog-write scope). ' +
-          'Set platforms.naver.accessToken.',
+          'Set platforms.naver.accessToken, or enable Headless 브라우저 게시 (useBrowser).',
         'naver',
       );
     }

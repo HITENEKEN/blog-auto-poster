@@ -40,8 +40,8 @@ interface SettingsData {
       username: string;
       password: string;
       clientId: string;
-      clientSecret: string;
       accessToken: string;
+      useBrowser: boolean;
     };
   };
   imageProviders: {
@@ -69,8 +69,8 @@ const defaultSettings: SettingsData = {
       username: '',
       password: '',
       clientId: '',
-      clientSecret: '',
       accessToken: '',
+      useBrowser: false,
     },
   },
   imageProviders: {
@@ -141,6 +141,7 @@ interface ServerConfig {
       clientId?: string;
       clientSecret?: string;
       accessToken?: string;
+      useBrowser?: boolean;
     };
   };
   llm?: { provider?: string; apiKey?: string; model?: string; baseUrl?: string };
@@ -198,6 +199,8 @@ function hydrateFromConfig(cfg: ServerConfig | undefined, base: SettingsData): S
       // 마스킹 값을 그대로 상태에 두어 저장 시 PUT accessToken='***'가 되고,
       // mergeConfig는 '***'를 스킵하므로 저장된 토큰이 보존된다.
       accessToken: p.naver.accessToken && p.naver.accessToken !== '' ? '***' : '',
+      // useBrowser는 불리언 플래그라 마스킹 대상이 아니다(평문 왕복).
+      useBrowser: p.naver.useBrowser === true,
     };
   const ip = cfg?.imageProviders || {};
   if (ip.dalle)
@@ -302,8 +305,7 @@ export default function Settings() {
       setSaving(null);
     }
   };
-
-  const handleChange = (section: string, field: string, value: string) => {
+  const handleChange = (section: string, field: string, value: string | boolean) => {
     setSettings((prev) => {
       const next: SettingsData = JSON.parse(JSON.stringify(prev));
       const parts = String(section).split('.');
@@ -558,6 +560,18 @@ export default function Settings() {
                   저장된 토큰이 있습니다(변경 시에만 새 토큰 입력)
                 </p>
               )}
+              <label className="col-span-full flex items-center gap-2 text-sm">
+                <input
+                  type="checkbox"
+                  checked={settings.platforms.naver.useBrowser}
+                  onChange={(e) => handleChange('platforms.naver', 'useBrowser', e.target.checked)}
+                  className="h-4 w-4 accent-primary"
+                />
+                Headless 브라우저로 게시 (API 토큰 불필요)
+              </label>
+              <p className="col-span-full text-xs text-muted-foreground">
+                최초 1회 npm run naver:login으로 로그인 세션을 만들어야 합니다
+              </p>
               <p className="col-span-full text-xs text-muted-foreground">
                 게시에는 Naver Developers 앱에 &lsquo;블로그&rsquo; API 권한이 포함된 네이버 로그인
                 OAuth 접근 토큰이 필요합니다 (Client ID/Secret만으로는 게시할 수 없습니다).
