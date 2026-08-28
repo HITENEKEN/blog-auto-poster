@@ -698,6 +698,16 @@ export async function registerRoutes(app: FastifyInstance, context: RouteContext
     return { jobId };
   });
 
+  app.get('/api/scheduler/config', async () => {
+    const config = scheduler.getConfig();
+    return {
+      success: true,
+      enabled: config.enabled,
+      running: scheduler.isRunning(),
+      config,
+    };
+  });
+
   app.put('/api/scheduler/config', async (request) => {
     const updates = request.body as Partial<SchedulerConfig>;
     scheduler.updateConfig(updates);

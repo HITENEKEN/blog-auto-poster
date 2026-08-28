@@ -24,7 +24,9 @@ test.describe('scheduler', () => {
     await expect(page.getByText('예약된 작업 (0개)')).toBeVisible();
     await expect(page.getByText('예약된 작업이 없습니다.')).toBeVisible();
 
-    // Stopped state: the toggle offers "스케줄러 시작" (:86-93), never "중지".
+    // Stopped state: hydrated from GET /api/scheduler/config (Scheduler.tsx:38-43
+    // sets schedulerRunning from response.data.enabled), so the toggle offers
+    // "스케줄러 시작" (:86-93), never "중지".
     await expect(page.getByRole('button', { name: '스케줄러 시작' })).toBeVisible();
     await expect(page.getByRole('button', { name: '스케줄러 중지' })).toHaveCount(0);
 
@@ -32,12 +34,22 @@ test.describe('scheduler', () => {
     expect(schedulerConfigPuts).toHaveLength(0);
 
     // API-level: GET /api/scheduler/jobs returns an empty jobs array
-    // (routes/index.ts:681-693 wrapper { jobs: [...] }).
+    // (routes/index.ts wrapper { jobs: [...] }), and the hydrated config
+    // confirms stopped: enabled false (e2e profile), not running.
     const token = await getAuthToken(page);
     const res = await page.request.get('/api/scheduler/jobs', { headers: authHeaders(token) });
     expect(res.ok()).toBeTruthy();
     const body = (await res.json()) as { jobs: unknown[] };
     expect(Array.isArray(body.jobs)).toBe(true);
     expect(body.jobs).toHaveLength(0);
+
+    const cfgRes = await page.request.get('/api/scheduler/config', {
+      headers: authHeaders(token),
+    });
+    expect(cfgRes.ok()).toBeTruthy();
+    const cfg = (await cfgRes.json()) as { success: boolean; enabled: boolean; running: boolean };
+    expect(cfg.success).toBe(true);
+    expect(cfg.enabled).toBe(false);
+    expect(cfg.running).toBe(false);
   });
 });
