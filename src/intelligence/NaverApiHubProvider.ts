@@ -36,6 +36,198 @@ type NaverApiSearchResponse<T = NaverApiBlogItem> = {
   items: T[];
 };
 
+// ---------------------------------------------------------------------------
+// Related-keyword extraction helpers (deterministic, dependency-free)
+// ---------------------------------------------------------------------------
+
+/** URL/protocol debris the sanitizer splits URLs into — never keywords. */
+const URL_FRAGMENTS: Record<string, true> = {
+  http: true,
+  https: true,
+  html: true,
+  htm: true,
+  aspx: true,
+  asp: true,
+  jsp: true,
+  php: true,
+  blog: true,
+  naver: true,
+  mail: true,
+  news: true,
+};
+
+/** Generic blog/UI navigation words — not plausible search keywords. */
+const NAV_WORDS: Record<string, true> = {
+  출처: true,
+  블로그: true,
+  포스트: true,
+  포스팅: true,
+  댓글: true,
+  공유: true,
+  스크랩: true,
+  구독: true,
+  이웃: true,
+  이웃추가: true,
+  카페: true,
+  프로필: true,
+  검색: true,
+  네이버: true,
+  관련: true,
+  메인: true,
+  홈: true,
+  채널: true,
+  글쓰기: true,
+  이미지: true,
+  동영상: true,
+  정보: true,
+};
+
+/** Grammar/filler words that survive particle stripping (조사/어미 붙은 어구). */
+const WORD_STOPWORDS: Record<string, true> = {
+  그리고: true,
+  하지만: true,
+  그러나: true,
+  때문에: true,
+  위해서: true,
+  대해서: true,
+  있습니다: true,
+  합니다: true,
+  입니다: true,
+  했습니다: true,
+  있는: true,
+  이런: true,
+  저런: true,
+  수가: true,
+  것을: true,
+  하고: true,
+  하는: true,
+  했는데: true,
+  위해: true,
+  위한: true,
+  대한: true,
+  때문: true,
+  같은: true,
+  없는: true,
+  해서: true,
+  해도: true,
+  됩니다: true,
+  있다: true,
+  없다: true,
+};
+
+/** Sentence-leading connectives; safe to drop from token starts. Real nouns
+ * may begin with particle syllables (이륜차, 이벤트), so 이/가/은 are NOT
+ * stripped at word start. */
+const LEADING_CONNECTIVES = [
+  '그리고나서',
+  '그리고',
+  '하지만',
+  '그러나',
+  '그래서',
+  '그런데',
+  '또한',
+  '및',
+  '하고',
+  '또',
+].sort((a, b) => b.length - a.length);
+
+/** Trailing particles (조사), longest first. Stripped iteratively only while
+ * the remainder stays ≥2 chars: '청소를' → '청소', but '가을' is kept
+ * (remainder '가' would be a 1-char stub). */
+const TRAILING_PARTICLES = [
+  '으로서',
+  '부터',
+  '까지',
+  '처럼',
+  '보다',
+  '마다',
+  '에서',
+  '으로',
+  '에게',
+  '한테',
+  '이나',
+  '이라',
+  '라는',
+  '라고',
+  '이고',
+  '하고',
+  '조차',
+  '이며',
+  '은',
+  '는',
+  '을',
+  '를',
+  '이',
+  '가',
+  '도',
+  '만',
+  '의',
+  '에',
+  '와',
+  '과',
+  '랑',
+  '로',
+  '나',
+  '며',
+  '야',
+].sort((a, b) => b.length - a.length);
+
+/**
+ * Turn a raw whitespace token from blog titles/descriptions into a plausible
+ * search keyword, or null when it is junk.
+ */
+function normalizeKeywordToken(raw: string): string | null {
+  let word = raw.trim();
+  if (word.length < 2 || word.length > 15) return null;
+
+  const lower = word.toLowerCase();
+  if (
+    Object.hasOwn(URL_FRAGMENTS, lower) ||
+    Object.hasOwn(NAV_WORDS, word) ||
+    Object.hasOwn(WORD_STOPWORDS, word)
+  ) {
+    return null;
+  }
+  if (/^\d+$/.test(word)) return null; // pure numbers
+
+  for (const particle of LEADING_CONNECTIVES) {
+    if (word.startsWith(particle) && word.length - particle.length >= 2) {
+      word = word.slice(particle.length);
+      break;
+    }
+  }
+
+  let stripped = true;
+  while (stripped) {
+    stripped = false;
+    for (const particle of TRAILING_PARTICLES) {
+      if (word.endsWith(particle) && word.length - particle.length >= 2) {
+        word = word.slice(0, -particle.length);
+        stripped = true;
+        break;
+      }
+    }
+  }
+
+  if (word.length < 2) return null;
+  const finalLower = word.toLowerCase();
+  if (
+    Object.hasOwn(URL_FRAGMENTS, finalLower) ||
+    Object.hasOwn(NAV_WORDS, word) ||
+    Object.hasOwn(WORD_STOPWORDS, word)
+  ) {
+    return null;
+  }
+
+  // Pure-Latin debris: keep only brand/model-like tokens ('SSD', 'Galaxy',
+  // 'samsung'); lowercase fragments shorter than 4 chars ('com', 'www') die.
+  if (/^[a-zA-Z]+$/.test(word) && !/[A-Z]/.test(word) && word.length < 4) {
+    return null;
+  }
+
+  return word;
+}
+
 // ============================================================================
 // Naver API Hub - Keyword Provider (신규)
 // 기존 NaverKeywordProvider(DataLab 방식)는 유지하고 별도로 구현
@@ -179,43 +371,30 @@ export class NaverApiHubKeywordProvider implements KeywordProvider {
     blogResults: NaverApiSearchResponse,
     seedKeyword: string,
   ): string[] {
-    const words = new Map<string, number>();
-    const stopWords = new Set([
-      '그리고',
-      '하지만',
-      '그러나',
-      '때문에',
-      '위해서',
-      '대해서',
-      '있습니다',
-      '합니다',
-      '입니다',
-      '했습니다',
-      '있는',
-      '이런',
-      '저런',
-      '수가',
-      '것을',
-      seedKeyword,
-    ]);
+    const seedLower = seedKeyword.toLowerCase();
+    const counts = new Map<string, { count: number; word: string }>();
 
     for (const item of blogResults.items || []) {
       const text = `${item.title || ''} ${item.description || ''}`
         .replace(/<[^>]*>/g, '')
         .replace(/[^\uAC00-\uD7A3a-zA-Z0-9\s]/g, ' ');
 
-      for (const word of text.split(/\s+/)) {
-        if (word.length >= 2 && word.length <= 15 && !stopWords.has(word)) {
-          words.set(word, (words.get(word) || 0) + 1);
-        }
+      for (const raw of text.split(/\s+/)) {
+        const word = normalizeKeywordToken(raw);
+        if (!word) continue;
+        const key = word.toLowerCase();
+        if (key === seedLower) continue;
+        const entry = counts.get(key);
+        if (entry) entry.count += 1;
+        else counts.set(key, { count: 1, word });
       }
     }
 
-    return Array.from(words.entries())
-      .filter(([_, count]) => count >= 2)
-      .sort((a, b) => b[1] - a[1])
+    return Array.from(counts.entries())
+      .filter(([, entry]) => entry.count >= 2)
+      .sort((a, b) => b[1].count - a[1].count)
       .slice(0, 15)
-      .map(([word]) => word);
+      .map(([, entry]) => entry.word);
   }
 
   /**

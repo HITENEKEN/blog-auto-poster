@@ -997,27 +997,27 @@ export async function registerRoutes(app: FastifyInstance, context: RouteContext
     }
   });
   app.register(async (fastify) => {
-    fastify.get('/ws', { websocket: true }, (connection, request) => {
+    fastify.get('/ws', { websocket: true }, (socket, request) => {
       logger.info({ ip: request.ip }, 'WebSocket connected');
 
-      connection.socket.on('message', (message) => {
+      socket.on('message', (message) => {
         try {
           const data = JSON.parse(message.toString());
           // Handle incoming messages (ping, subscribe, etc.)
           if (data.type === 'ping') {
-            connection.socket.send(JSON.stringify({ type: 'pong', timestamp: Date.now() }));
+            socket.send(JSON.stringify({ type: 'pong', timestamp: Date.now() }));
           }
         } catch {
           // Ignore invalid messages
         }
       });
 
-      connection.socket.on('close', () => {
+      socket.on('close', () => {
         logger.info({ ip: request.ip }, 'WebSocket disconnected');
       });
 
       // Send initial status
-      connection.socket.send(
+      socket.send(
         JSON.stringify({
           type: 'status',
           data: {
