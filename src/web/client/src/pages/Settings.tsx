@@ -686,7 +686,8 @@ export default function Settings() {
                 )}
                 <p className="mt-1 text-xs text-muted-foreground">
                   OpenRouter/Anthropic 등 OpenAI 호환 엔드포인트. 비워두면 프로바이더 기본 값을
-                  사용합니다.
+                  사용합니다. 엔드포인트 전체 경로(/chat/completions 등)가 아닌 루트 URL — 예:
+                  https://api.deepseek.com/v1
                 </p>
               </div>
               {settings.llm.provider === 'openrouter' && (

@@ -1,5 +1,9 @@
 import { describe, expect, it } from 'vitest';
-import { LLM_PROVIDERS, resolveLlmValidateConfig } from '../../src/content/ContentGenerator';
+import {
+  LLM_PROVIDERS,
+  normalizeLlmBaseUrl,
+  resolveLlmValidateConfig,
+} from '../../src/content/ContentGenerator';
 
 // 순수 함수만 검증한다: 저장된 설정(saved) 위에 연결 테스트 본문(override)을 덧씌우는 규칙.
 const saved = {
@@ -89,5 +93,58 @@ describe('resolveLlmValidateConfig — provider/model/baseUrl', () => {
       model: 'deepseek-chat',
       baseUrl: '',
     });
+  });
+});
+
+describe('normalizeLlmBaseUrl', () => {
+  it("strips a trailing '/chat/completions' (case-insensitive)", () => {
+    expect(normalizeLlmBaseUrl('https://api.deepseek.com/chat/completions')).toBe(
+      'https://api.deepseek.com',
+    );
+    expect(normalizeLlmBaseUrl('https://api.deepseek.com/v1/Chat/Completions')).toBe(
+      'https://api.deepseek.com/v1',
+    );
+  });
+
+  it('strips trailing slashes', () => {
+    expect(normalizeLlmBaseUrl('https://api.deepseek.com/v1/')).toBe('https://api.deepseek.com/v1');
+    expect(normalizeLlmBaseUrl('https://api.deepseek.com///')).toBe('https://api.deepseek.com');
+  });
+
+  it('leaves a bare host unchanged', () => {
+    expect(normalizeLlmBaseUrl('https://api.deepseek.com')).toBe('https://api.deepseek.com');
+  });
+
+  it('trims surrounding whitespace', () => {
+    expect(normalizeLlmBaseUrl('  https://api.deepseek.com/v1  ')).toBe(
+      'https://api.deepseek.com/v1',
+    );
+  });
+
+  it('returns empty for empty input and never strips down to empty', () => {
+    expect(normalizeLlmBaseUrl('')).toBe('');
+    expect(normalizeLlmBaseUrl('   ')).toBe('');
+    expect(normalizeLlmBaseUrl('/chat/completions')).toBe('/chat/completions');
+  });
+});
+
+describe('resolveLlmValidateConfig — baseUrl normalization', () => {
+  it('normalizes a full-endpoint baseUrl from the saved config', () => {
+    const cfg = resolveLlmValidateConfig(
+      {
+        provider: 'deepseek',
+        apiKey: 'sk-x',
+        baseUrl: 'https://api.deepseek.com/chat/completions',
+      },
+      {},
+    );
+    expect(cfg.baseUrl).toBe('https://api.deepseek.com');
+  });
+
+  it('normalizes a full-endpoint baseUrl from the override', () => {
+    const cfg = resolveLlmValidateConfig(saved, {
+      baseUrl: 'https://api.deepseek.com/chat/completions/',
+    });
+    expect(cfg.baseUrl).toBe('https://api.deepseek.com');
   });
 });

@@ -443,7 +443,10 @@ export class ContentGenerator {
     // deepseek/groq/mistral/xai/ollama 및 향후 추가되는 호환 프로바이더 포함).
     const client = new OpenAI({
       apiKey: this.apiKey,
-      baseURL: this.baseUrl || LLM_PROVIDERS[this.provider]?.baseUrl || undefined,
+      baseURL:
+        normalizeLlmBaseUrl(this.baseUrl || '') ||
+        LLM_PROVIDERS[this.provider]?.baseUrl ||
+        undefined,
     });
     const completion = await client.chat.completions.create({
       model: this.model || 'gpt-4o-mini',
@@ -538,6 +541,20 @@ export function resolveLlmConfigFromConfigManager(): ContentGeneratorConfig {
     baseUrl: (llm.baseUrl as string) || '',
   };
 }
+/**
+ * 사용자가 Base URL에 OpenAI SDK가 덧붙일 엔드포인트 경로까지 입력하는 실수를 방어한다.
+ * trim → 뒤 슬래시 제거 → (남는 결과가 빈 값이 아니면) 대소문자 무시하고
+ * '/chat/completions' 접미사 제거. 예:
+ *   'https://api.deepseek.com/chat/completions' → 'https://api.deepseek.com'
+ *   'https://api.deepseek.com/v1/' → 'https://api.deepseek.com/v1'
+ *   'https://api.deepseek.com' → 그대로
+ */
+export function normalizeLlmBaseUrl(url: string): string {
+  const trimmed = (url || '').trim().replace(/\/+$/, '');
+  if (!trimmed) return '';
+  const stripped = trimmed.replace(/\/chat\/completions$/i, '').replace(/\/+$/, '');
+  return stripped || trimmed;
+}
 
 /**
  * 저장된 설정 위에 연결 테스트 요청 본문(입력 중인 폼 값)을 덧씌운다.
@@ -555,7 +572,7 @@ export function resolveLlmValidateConfig(
   const apiKey =
     (trim(ov.apiKey) && trim(ov.apiKey) !== '***' ? trim(ov.apiKey) : '') || trim(saved.apiKey);
   const model = trim(ov.model) || trim(saved.model) || LLM_PROVIDERS[provider]?.defaultModel || '';
-  const baseUrl = trim(ov.baseUrl) || trim(saved.baseUrl);
+  const baseUrl = normalizeLlmBaseUrl(trim(ov.baseUrl) || trim(saved.baseUrl));
 
   return { provider, apiKey, model, baseUrl };
 }
