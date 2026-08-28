@@ -13,7 +13,8 @@ import type { CronScheduler } from '@scheduler/CronScheduler';
 import type { JobQueueImpl, PublishedPostRow } from '@scheduler/JobQueue';
 import type { PlatformRegistry } from '@platforms/registry';
 import type { BlogInfo } from '../../shared/types';
-import { createContentGeneratorFromConfig } from '@content/ContentGenerator';
+import { createContentGeneratorFromConfig, LLM_PROVIDERS } from '@content/ContentGenerator';
+import { fetchLlmModels } from '@content/LlmModels';
 import { createTemplateEngine } from '@content/TemplateEngine';
 import { createImageGenerator } from '@content/ImageGenerator';
 import { createPostAssembler } from '@content/PostAssembler';
@@ -148,6 +149,31 @@ export async function registerRoutes(app: FastifyInstance, context: RouteContext
   // 설정 해석은 createContentGeneratorFromConfig와 동일(llm 섹션 우선, 없으면 imageProviders.gemini).
   app.post('/api/llm/validate', async () => {
     return createContentGeneratorFromConfig().validateConnection();
+  });
+
+  // LLM 모델 목록 조회: 저장된 apiKey(마스킹 전 원본)로 프로바이더의 /models를 호출한다.
+  // 응답에는 모델 id만 담고, 절대 apiKey를 포함하지 않는다. 키 미저장/오류는 200 + error 힌트.
+  app.get('/api/llm/models', async (request) => {
+    const provider = String((request.query as { provider?: string }).provider || '');
+    if (!LLM_PROVIDERS[provider]) {
+      return { provider, models: [], error: '지원하지 않는 프로바이더입니다' };
+    }
+    const apiKey = configManager.get<string>('llm.apiKey', '');
+    if (!apiKey) {
+      return {
+        provider,
+        models: [],
+        error: 'API 키가 저장되지 않았습니다. 먼저 저장하세요.',
+      };
+    }
+    try {
+      const models = await fetchLlmModels(provider, apiKey);
+      return { provider, models };
+    } catch (error) {
+      // error 메시지는 fetchLlmModels에서 이미 키/URL을 제거한 상태다.
+      logger.warn({ provider }, 'Failed to fetch LLM models');
+      return { provider, models: [], error: String(error) };
+    }
   });
 
   // Dashboard stats

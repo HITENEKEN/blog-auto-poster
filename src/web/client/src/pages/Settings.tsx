@@ -12,6 +12,7 @@ import {
   Key,
   Globe,
   RefreshCw,
+  Loader2,
   Upload,
   Trash2,
   Sparkles,
@@ -222,6 +223,33 @@ export default function Settings() {
   const [activeTab, setActiveTab] = useState('general');
   const [validatingLlm, setValidatingLlm] = useState(false);
   const selectedLlmOption = LLM_PROVIDER_OPTIONS.find((o) => o.value === settings.llm.provider);
+  const [llmModels, setLlmModels] = useState<string[]>([]);
+  const [llmModelsError, setLlmModelsError] = useState('');
+  const [loadingModels, setLoadingModels] = useState(false);
+
+  // 프로바이더가 실제 제공하는 모델 목록 조회. 키 미저장/조회 실패 시 서버의
+  // error 힌트를 그대로 표시하고, 목록이 비면 기존 자유 입력 Input으로 폴백한다.
+  const loadLlmModels = async (provider: string) => {
+    if (!provider) return;
+    setLoadingModels(true);
+    try {
+      const res = await api.get('/api/llm/models', { params: { provider } });
+      const data = res.data as { models?: string[]; error?: string };
+      setLlmModels(Array.isArray(data.models) ? data.models : []);
+      setLlmModelsError(data.error || '');
+    } catch {
+      setLlmModels([]);
+      setLlmModelsError('모델 목록을 조회할 수 없습니다.');
+    } finally {
+      setLoadingModels(false);
+    }
+  };
+
+  // 마운트 시 1회(저장된 키가 있으면 목록 로드, 없으면 서버의 힌트 error가 내려옴) +
+  // 프로바이더 변경 시마다 재조회.
+  useEffect(() => {
+    void loadLlmModels(settings.llm.provider);
+  }, [settings.llm.provider]);
 
   useEffect(() => {
     // Source of truth is the server; fall back to localStorage/defaults if unreachable.
@@ -581,14 +609,58 @@ export default function Settings() {
                   </SelectContent>
                 </Select>
               </div>
-              {renderInput(
-                'llm',
-                'model',
-                '모델',
-                'text',
-                LLM_PROVIDER_OPTIONS.find((o) => o.value === settings.llm.provider)?.defaultModel ??
-                  'gemini-1.5-pro',
-              )}
+              <div className="space-y-1">
+                <div className="flex items-center justify-between">
+                  <Label htmlFor="model">모델</Label>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    className="h-6 px-2 text-xs text-muted-foreground"
+                    onClick={() => loadLlmModels(settings.llm.provider)}
+                    disabled={loadingModels}
+                  >
+                    {loadingModels ? (
+                      <Loader2 className="h-3 w-3 animate-spin mr-1" />
+                    ) : (
+                      <RefreshCw className="h-3 w-3 mr-1" />
+                    )}
+                    새로고침
+                  </Button>
+                </div>
+                {llmModels.length > 0 ? (
+                  <Select
+                    id="model"
+                    value={settings.llm.model}
+                    disabled={loadingModels}
+                    onChange={(e) => handleChange('llm', 'model', e.target.value)}
+                  >
+                    {/* 저장된 값이 목록에 없어도 셀렉트에 렌더되도록 보존한다. */}
+                    {settings.llm.model && !llmModels.includes(settings.llm.model) && (
+                      <option value={settings.llm.model}>{settings.llm.model}</option>
+                    )}
+                    {llmModels.map((m) => (
+                      <option key={m} value={m}>
+                        {m}
+                      </option>
+                    ))}
+                  </Select>
+                ) : (
+                  <Input
+                    id="model"
+                    type="text"
+                    disabled={loadingModels}
+                    value={String(settings.llm.model ?? '')}
+                    onChange={(e) => handleChange('llm', 'model', e.target.value)}
+                    placeholder={
+                      LLM_PROVIDER_OPTIONS.find((o) => o.value === settings.llm.provider)
+                        ?.defaultModel ?? 'gemini-1.5-pro'
+                    }
+                  />
+                )}
+                {llmModelsError && (
+                  <p className="text-xs text-muted-foreground">{llmModelsError}</p>
+                )}
+              </div>
               <div>
                 {renderInput('llm', 'apiKey', 'API Key', 'password', '••••••••')}
                 {/* '***'는 서버가 마스킹한 저장된 키. 변경할 때만 새 키를 입력하면 된다. */}
