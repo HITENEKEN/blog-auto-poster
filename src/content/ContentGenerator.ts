@@ -6,6 +6,23 @@ import OpenAI from 'openai';
 
 const logger = getLogger('content-generator');
 
+/**
+ * 지원 LLM 프로바이더 메타데이터. gemini를 제외한 모든 프로바이더는
+ * OpenAI 호환 API를 사용하며, 여기의 baseUrl이 기본 엔드포인트가 된다.
+ * 클라이언트용 쌍둥이: src/web/shared/llmProviders.ts (수동 동기화 유지).
+ */
+export const LLM_PROVIDERS: Record<string, { baseUrl: string; defaultModel: string }> = {
+  gemini: { baseUrl: '', defaultModel: 'gemini-1.5-pro' },
+  openai: { baseUrl: 'https://api.openai.com/v1', defaultModel: 'gpt-4o-mini' },
+  anthropic: { baseUrl: 'https://api.anthropic.com/v1', defaultModel: 'claude-3-5-sonnet-latest' },
+  openrouter: { baseUrl: 'https://openrouter.ai/api/v1', defaultModel: 'openai/gpt-4o-mini' },
+  deepseek: { baseUrl: 'https://api.deepseek.com/v1', defaultModel: 'deepseek-chat' },
+  groq: { baseUrl: 'https://api.groq.com/openai/v1', defaultModel: 'llama-3.3-70b-versatile' },
+  mistral: { baseUrl: 'https://api.mistral.ai/v1', defaultModel: 'mistral-large-latest' },
+  xai: { baseUrl: 'https://api.x.ai/v1', defaultModel: 'grok-2-latest' },
+  ollama: { baseUrl: 'http://localhost:11434/v1', defaultModel: 'llama3.1' },
+};
+
 export interface TopPost {
   title: string;
   bloggername: string;
@@ -220,6 +237,7 @@ export interface ContentGeneratorConfig {
   provider?: string;
   apiKey?: string;
   model?: string;
+  baseUrl?: string;
 }
 
 /**
@@ -237,11 +255,13 @@ export class ContentGenerator {
   private readonly provider: string;
   private readonly apiKey?: string;
   private readonly model: string;
+  private readonly baseUrl?: string;
 
   constructor(config: ContentGeneratorConfig = {}) {
     this.provider = config.provider || 'gemini';
     this.apiKey = config.apiKey;
     this.model = config.model || 'gemini-1.5-pro';
+    this.baseUrl = config.baseUrl || undefined;
   }
 
   /**
@@ -412,23 +432,28 @@ export class ContentGenerator {
 
   /** (system, user) 프롬프트를 설정된 프로바이더로 실행해 원문 텍스트를 반환한다. */
   private async complete(system: string, user: string): Promise<string> {
-    if (this.provider === 'openai') {
-      const client = new OpenAI({ apiKey: this.apiKey });
-      const completion = await client.chat.completions.create({
-        model: this.model || 'gpt-4o-mini',
-        messages: [
-          { role: 'system', content: system },
-          { role: 'user', content: user },
-        ],
-        response_format: { type: 'json_object' },
-      });
-      return completion.choices[0]?.message?.content || '';
+    if (this.provider === 'gemini') {
+      const genAI = new GoogleGenerativeAI(this.apiKey!);
+      const model = genAI.getGenerativeModel({ model: this.model, systemInstruction: system });
+      const result = await model.generateContent(user);
+      return result.response.text();
     }
 
-    const genAI = new GoogleGenerativeAI(this.apiKey!);
-    const model = genAI.getGenerativeModel({ model: this.model, systemInstruction: system });
-    const result = await model.generateContent(user);
-    return result.response.text();
+    // gemini 외 전부 OpenAI 호환 엔드포인트로 처리한다(openai/anthropic/openrouter/
+    // deepseek/groq/mistral/xai/ollama 및 향후 추가되는 호환 프로바이더 포함).
+    const client = new OpenAI({
+      apiKey: this.apiKey,
+      baseURL: this.baseUrl || LLM_PROVIDERS[this.provider]?.baseUrl || undefined,
+    });
+    const completion = await client.chat.completions.create({
+      model: this.model || 'gpt-4o-mini',
+      messages: [
+        { role: 'system', content: system },
+        { role: 'user', content: user },
+      ],
+      response_format: { type: 'json_object' },
+    });
+    return completion.choices[0]?.message?.content || '';
   }
 
   private parseTemplateData(text: string, fields: string[]): Record<string, unknown> | null {
@@ -501,14 +526,17 @@ export function createContentGeneratorFromConfig(): ContentGenerator {
     const llm = (cm.get('llm') as Record<string, unknown>) || {};
     const gemini = (cm.get('imageProviders.gemini') as Record<string, unknown>) || {};
     const source = Object.keys(llm).length ? llm : gemini;
+    const provider =
+      (source.provider as string) ||
+      (llm.provider as string) ||
+      (gemini.provider as string) ||
+      'gemini';
     cfg = {
-      provider:
-        (source.provider as string) ||
-        (llm.provider as string) ||
-        (gemini.provider as string) ||
-        'gemini',
+      provider,
       apiKey: (source.apiKey as string) || '',
-      model: (source.model as string) || 'gemini-1.5-pro',
+      // 설정된 모델이 없으면 프로바이더 기본 모델로 폴백한다.
+      model: (source.model as string) || LLM_PROVIDERS[provider]?.defaultModel || 'gemini-1.5-pro',
+      baseUrl: (llm.baseUrl as string) || '',
     };
   } catch {
     cfg = {};

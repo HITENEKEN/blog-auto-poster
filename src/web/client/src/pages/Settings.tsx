@@ -19,6 +19,7 @@ import {
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from './ui/Select';
 import { toast } from './ui/use-toast';
 import { api } from '../services/api';
+import { LLM_PROVIDER_OPTIONS } from '@shared/llmProviders';
 
 interface SettingsData {
   general: {
@@ -46,7 +47,7 @@ interface SettingsData {
     stableDiffusion: { apiKey: string; apiUrl: string };
     gemini: { apiKey: string; model: string };
   };
-  llm: { provider: string; apiKey: string; model: string };
+  llm: { provider: string; apiKey: string; model: string; baseUrl: string };
   notifications: {
     email: string;
     slackWebhook: string;
@@ -68,7 +69,7 @@ const defaultSettings: SettingsData = {
     stableDiffusion: { apiKey: '', apiUrl: 'https://api.stability.ai' },
     gemini: { apiKey: '', model: 'gemini-1.5-pro' },
   },
-  llm: { provider: 'gemini', apiKey: '', model: 'gemini-1.5-pro' },
+  llm: { provider: 'gemini', apiKey: '', model: 'gemini-1.5-pro', baseUrl: '' },
   notifications: { email: '', slackWebhook: '', discordWebhook: '' },
 };
 
@@ -132,7 +133,7 @@ interface ServerConfig {
       clientSecret?: string;
     };
   };
-  llm?: { provider?: string; apiKey?: string; model?: string };
+  llm?: { provider?: string; apiKey?: string; model?: string; baseUrl?: string };
   imageProviders?: {
     dalle?: { apiKey?: string; model?: string };
     'stable-diffusion'?: { apiKey?: string; apiUrl?: string };
@@ -205,6 +206,7 @@ function hydrateFromConfig(cfg: ServerConfig | undefined, base: SettingsData): S
       // (''로 치환하면 무수정 저장이 실제 키를 지우게 되므로 금지.)
       apiKey: llm.apiKey && llm.apiKey !== '' ? '***' : '',
       model: llm.model ?? 'gemini-1.5-pro',
+      baseUrl: llm.baseUrl ?? '',
     };
   if (ip.gemini)
     next.imageProviders.gemini = {
@@ -219,6 +221,7 @@ export default function Settings() {
   const [saving, setSaving] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState('general');
   const [validatingLlm, setValidatingLlm] = useState(false);
+  const selectedLlmOption = LLM_PROVIDER_OPTIONS.find((o) => o.value === settings.llm.provider);
 
   useEffect(() => {
     // Source of truth is the server; fall back to localStorage/defaults if unreachable.
@@ -546,12 +549,23 @@ export default function Settings() {
                   value={settings.llm.provider}
                   onValueChange={(v: string) => {
                     handleChange('llm', 'provider', v);
-                    const defaults =
-                      v === 'openai'
-                        ? { old: 'gemini-1.5-pro', next: 'gpt-4o-mini' }
-                        : { old: 'gpt-4o-mini', next: 'gemini-1.5-pro' };
-                    if (!settings.llm.model || settings.llm.model === defaults.old) {
-                      handleChange('llm', 'model', defaults.next);
+                    const nextOpt = LLM_PROVIDER_OPTIONS.find((o) => o.value === v);
+                    const prevOpt = LLM_PROVIDER_OPTIONS.find(
+                      (o) => o.value === settings.llm.provider,
+                    );
+                    // 모델이 비었거나 이전 프로바이더의 기본 모델이면 새 기본 모델로 교체.
+                    if (
+                      nextOpt &&
+                      (!settings.llm.model || settings.llm.model === prevOpt?.defaultModel)
+                    ) {
+                      handleChange('llm', 'model', nextOpt.defaultModel);
+                    }
+                    // baseUrl이 다른 프로바이더의 기본 URL이면 리셋('' = 프로바이더 기본 사용).
+                    if (nextOpt && settings.llm.baseUrl) {
+                      const stale = LLM_PROVIDER_OPTIONS.some(
+                        (o) => o.value !== v && o.defaultBaseUrl === settings.llm.baseUrl,
+                      );
+                      if (stale) handleChange('llm', 'baseUrl', '');
                     }
                   }}
                 >
@@ -559,8 +573,11 @@ export default function Settings() {
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
-                    <SelectItem value="gemini">Gemini (기본)</SelectItem>
-                    <SelectItem value="openai">OpenAI</SelectItem>
+                    {LLM_PROVIDER_OPTIONS.map((opt) => (
+                      <SelectItem key={opt.value} value={opt.value}>
+                        {opt.label}
+                      </SelectItem>
+                    ))}
                   </SelectContent>
                 </Select>
               </div>
@@ -569,7 +586,8 @@ export default function Settings() {
                 'model',
                 '모델',
                 'text',
-                settings.llm.provider === 'openai' ? 'gpt-4o-mini' : 'gemini-1.5-pro',
+                LLM_PROVIDER_OPTIONS.find((o) => o.value === settings.llm.provider)?.defaultModel ??
+                  'gemini-1.5-pro',
               )}
               <div>
                 {renderInput('llm', 'apiKey', 'API Key', 'password', '••••••••')}
@@ -580,6 +598,25 @@ export default function Settings() {
                   </p>
                 )}
               </div>
+              <div>
+                {renderInput(
+                  'llm',
+                  'baseUrl',
+                  'Base URL',
+                  'text',
+                  selectedLlmOption?.defaultBaseUrl || '기본 URL 사용',
+                )}
+                <p className="mt-1 text-xs text-muted-foreground">
+                  OpenRouter/Anthropic 등 OpenAI 호환 엔드포인트. 비워두면 프로바이더 기본 값을
+                  사용합니다.
+                </p>
+              </div>
+              {settings.llm.provider === 'openrouter' && (
+                <p className="md:col-span-2 text-xs text-muted-foreground">
+                  OpenRouter 모델은 vendor-prefixed 슬러그(예: openai/gpt-4o-mini,
+                  anthropic/claude-3.5-sonnet)로 입력하세요.
+                </p>
+              )}
             </CardContent>
           </Card>
           <div className="flex gap-2">
