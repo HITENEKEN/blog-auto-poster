@@ -10,6 +10,7 @@ optionalFields:
   - "recommendations"
   - "faqList"
   - "topPosts"
+  - "keywordInsight"
   - "experienceIntro"
   - "realUsageStory"
   - "whyIChoseIt"
@@ -68,6 +69,11 @@ jsonLd:
 @media(max-width:600px){.ccg-header h1{font-size:1.25rem}.ccg-table{font-size:.82rem}.ccg-table th,.ccg-table td{padding:6px}}
 </style>
 
+<div class="ccg-disclosure" style="font-size:.85rem;color:#868e96;margin:0 0 16px;">
+이 포스트는 쿠팡 파트너스 활동의 일환으로, 일정액의 수수료를 제공받을 수 있습니다.
+</div>
+
+
 <!-- 헤더 -->
 <div class="ccg-header">
 <h1>{{categoryName}} BEST{{productCount}} 비교 추천</h1>
@@ -123,6 +129,18 @@ jsonLd:
 </div>
 </div>
 {{/each}}
+
+<!-- 인사이트: 검색/쇼핑 트렌드 (선택) -->
+{{#if keywordInsight}}
+<div class="ccg-section">
+<h2>요즘 {{categoryName}} 인기 추이</h2>
+<p>"{{keywordInsight.keyword}}" 검색 관심은 최근 {{keywordInsight.trendLabel}}예요.</p>
+{{#if keywordInsight.shoppingCategory}}<p>쇼핑 분야: {{keywordInsight.shoppingCategory.name}} (클릭 추이 점수 {{keywordInsight.shoppingRatio}})</p>{{/if}}
+{{#if keywordInsight.relatedKeywords.length}}
+<p>함께 많이 찾는 키워드: {{#each keywordInsight.relatedKeywords}}{{this}}{{#unless @last}}, {{/unless}}{{/each}}</p>
+{{/if}}
+</div>
+{{/if}}
 
 <!-- 벤치마크: 상위 블로그 (선택) -->
 {{#if topPosts}}

@@ -18,6 +18,7 @@ optionalFields:
   - "description"
   - "specs"
   - "topPosts"
+  - "keywordInsight"
   - "experienceIntro"
   - "realUsageStory"
   - "whyIChoseIt"
@@ -35,6 +36,10 @@ jsonLd:
 ---
 
 <div class="coupang-product-review">
+<div class="disclosure" style="font-size:.85rem;color:#868e96;margin:0 0 16px;">
+  이 포스트는 쿠팡 파트너스 활동의 일환으로, 일정액의 수수료를 제공받을 수 있습니다.
+</div>
+
   <!-- Product Header -->
   <div class="product-header">
     {{#if imageUrl}}
@@ -159,6 +164,18 @@ jsonLd:
     </div>
     {{/if}}
   </section>
+
+  <!-- Keyword insight: SCH_TRND trend + SHPP_INST shopping clicks (optional) -->
+  {{#if keywordInsight}}
+  <section class="keyword-insight">
+    <h2>요즘 {{categoryName}} 인기 추이</h2>
+    <p>"{{keywordInsight.keyword}}" 검색 관심은 최근 {{keywordInsight.trendLabel}}예요.</p>
+    {{#if keywordInsight.shoppingCategory}}<p>쇼핑 분야: {{keywordInsight.shoppingCategory.name}} (클릭 추이 점수 {{keywordInsight.shoppingRatio}})</p>{{/if}}
+    {{#if keywordInsight.relatedKeywords.length}}
+    <p>함께 많이 찾는 키워드: {{#each keywordInsight.relatedKeywords}}{{this}}{{#unless @last}}, {{/unless}}{{/each}}</p>
+    {{/if}}
+  </section>
+  {{/if}}
 
   <!-- Benchmark section: top-ranking Naver blog posts (optional) -->
   {{#if topPosts}}

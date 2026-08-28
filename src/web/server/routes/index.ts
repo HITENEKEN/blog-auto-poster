@@ -16,6 +16,9 @@ import type { BlogInfo } from '../../shared/types';
 import { createTemplateEngine } from '@content/TemplateEngine';
 import { createImageGenerator } from '@content/ImageGenerator';
 import { createPostAssembler } from '@content/PostAssembler';
+import { expandCoupangWidgets } from '@content/CoupangWidgets';
+import { generateDraftFromKeyword } from '@content/KeywordPostGenerator';
+import { savePostFiles, readPostFiles, listDrafts, type PostFileMeta } from '@content/postStorage';
 import * as fs from 'fs';
 import * as path from 'path';
 import * as yaml from 'js-yaml';
@@ -43,6 +46,22 @@ function maskSecrets(value: unknown): unknown {
   return value;
 }
 
+/**
+ * PUT /api/posts/:id에서 편집된 본문을 meta.platformContent의 각 플랫폼 entry에
+ * 재구성한다. tistory/naver는 identity, wordpress는 Gutenberg wp:html 블록 래핑
+ * (PostAssembler.convertToWordPressBlocks와 동일 포맷).
+ */
+function toPlatformContent(meta: PostFileMeta, content: string): Record<string, unknown> {
+  const source = (meta.platformContent || {}) as Record<string, Record<string, unknown>>;
+  const result: Record<string, unknown> = {};
+  for (const key of Object.keys(source)) {
+    result[key] = {
+      ...source[key],
+      content: key === 'wordpress' ? `<!-- wp:html -->\n${content}\n<!-- /wp:html -->` : content,
+    };
+  }
+  return result;
+}
 // One platform attempt inside the publish response (superset of shared PublishResult:
 // early-failure entries carry no `success` field, matching the historical payload).
 type PublishAttempt = {
@@ -594,19 +613,60 @@ export async function registerRoutes(app: FastifyInstance, context: RouteContext
       subId,
     });
 
-    // Save to output directory
-    const outputDir = `./output/posts/${post.id}`;
-    const fs = await import('fs');
-    const path = await import('path');
-    fs.mkdirSync(outputDir, { recursive: true });
-    fs.writeFileSync(path.join(outputDir, 'post.html'), post.content);
-    fs.writeFileSync(path.join(outputDir, 'meta.json'), JSON.stringify(post.meta, null, 2));
-    fs.writeFileSync(
-      path.join(outputDir, 'platform-content.json'),
-      JSON.stringify(post.platformContent, null, 2),
-    );
+    savePostFiles(post);
 
     return { post };
+  });
+
+  app.post('/api/posts/generate-from-keyword', async (request, reply) => {
+    const { keyword, template } = request.body as { keyword?: string; template?: string };
+    if (!keyword || !template) {
+      return reply.code(400).send({ error: 'keyword and template are required' });
+    }
+
+    try {
+      const post = await generateDraftFromKeyword({ keyword, templateName: template });
+      return { post };
+    } catch (error) {
+      logger.error({ error: String(error) }, 'Keyword draft generation failed');
+      return reply.code(500).send({ error: String(error) });
+    }
+  });
+
+  app.get('/api/posts/drafts', async () => {
+    return { drafts: listDrafts() };
+  });
+
+  app.get('/api/posts/:id', async (request, reply) => {
+    const { id } = request.params as { id: string };
+    const files = readPostFiles(id);
+    if (!files) {
+      return reply.code(404).send({ error: 'Post not found' });
+    }
+    return { post: { id, meta: files.meta, content: files.content } };
+  });
+
+  app.put('/api/posts/:id', async (request, reply) => {
+    const { id } = request.params as { id: string };
+    const { content, title } = request.body as { content?: string; title?: string };
+    if (typeof content !== 'string') {
+      return reply.code(400).send({ error: 'content is required' });
+    }
+
+    const files = readPostFiles(id);
+    if (!files) {
+      return reply.code(404).send({ error: 'Post not found' });
+    }
+
+    const meta = files.meta;
+    if (title) meta.title = title;
+    meta.platformContent = toPlatformContent(meta, content);
+    meta.updatedAt = new Date().toISOString();
+
+    fs.writeFileSync(`./output/posts/${id}/post.html`, content);
+    fs.writeFileSync(`./output/posts/${id}/meta.json`, JSON.stringify(meta, null, 2));
+
+    return { success: true, post: { id, meta, content } };
   });
 
   app.post('/api/posts/:id/publish', async (request) => {
@@ -643,6 +703,9 @@ export async function registerRoutes(app: FastifyInstance, context: RouteContext
         visibility: 'public',
         allowComments: true,
       };
+
+      // 쿠팡 위젯 마커를 실제 파트너스 HTML로 확장 (폴백 브랜치 포함 모든 content 대상)
+      platformContent.content = expandCoupangWidgets(platformContent.content);
 
       try {
         const result = await adapter.createPost(platformContent);

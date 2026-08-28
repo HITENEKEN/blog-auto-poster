@@ -22,6 +22,7 @@ optionalFields:
   - "targetAudience"
   - "oneLineReview"
   - "topPosts"
+  - "keywordInsight"
   - "experienceIntro"
   - "realUsageStory"
   - "whyIChoseIt"
@@ -92,6 +93,11 @@ jsonLd:
 .cpr-notice small{color:#adb5bd;font-size:.78rem}
 @media(max-width:600px){.cpr-wrap{padding:10px}.cpr-header h1{font-size:1.3rem}.cpr-price{font-size:1.4rem}.cpr-pctable th,.cpr-pctable td{font-size:.85rem}}
 </style>
+
+<div class="cpr-disclosure" style="font-size:.85rem;color:#868e96;margin:0 0 16px;">
+이 포스트는 쿠팡 파트너스 활동의 일환으로, 일정액의 수수료를 제공받을 수 있습니다.
+</div>
+
 
 <!-- ① 핵심 요약 -->
 <div class="cpr-summary">
@@ -165,6 +171,18 @@ jsonLd:
 <tr><td>{{this.label}}</td>{{#each this.values}}<td>{{this}}</td>{{/each}}</tr>
 {{/each}}
 </table>
+</div>
+{{/if}}
+
+<!-- 인사이트: 검색/쇼핑 트렌드 (선택) -->
+{{#if keywordInsight}}
+<div class="cpr-section">
+<h2>요즘 {{categoryName}} 인기 추이</h2>
+<p>"{{keywordInsight.keyword}}" 검색 관심은 최근 {{keywordInsight.trendLabel}}예요.</p>
+{{#if keywordInsight.shoppingCategory}}<p>쇼핑 분야: {{keywordInsight.shoppingCategory.name}} (클릭 추이 점수 {{keywordInsight.shoppingRatio}})</p>{{/if}}
+{{#if keywordInsight.relatedKeywords.length}}
+<p>함께 많이 찾는 키워드: {{#each keywordInsight.relatedKeywords}}{{this}}{{#unless @last}}, {{/unless}}{{/each}}</p>
+{{/if}}
 </div>
 {{/if}}
 

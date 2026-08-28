@@ -1,8 +1,7 @@
 import { getLogger } from '@core/logger';
-import { getConfigManager } from '@core/config';
 import { TemplateEngineImpl } from './TemplateEngine';
 import { ImageGeneratorImpl } from './ImageGenerator';
-import { ContentGenerator, createContentGeneratorFromConfig, TopPost } from './ContentGenerator';
+import { ContentGenerator, createContentGeneratorFromConfig } from './ContentGenerator';
 import {
   PostContent,
   PlatformPostContent,
@@ -11,12 +10,9 @@ import {
   ImageGenerationResult,
   PostStatus,
 } from '@core/interfaces';
+import { fetchTopPosts, fetchKeywordInsight } from './InsightFetch';
 
 const logger = getLogger('post-assembler');
-
-function stripHtml(input: string): string {
-  return input.replace(/<[^>]*>/g, '');
-}
 
 export interface SEOData {
   title: string;
@@ -111,13 +107,11 @@ export class PostAssembler {
     const cons = affiliateData.tags
       ?.filter((t) => t.startsWith('con:'))
       ?.map((t) => t.substring(4)) || ['색상 옵션 부족', '설명서 미흡'];
-
     const templateData: Record<string, unknown> = {
       productName: affiliateData.name,
       price: affiliateData.price,
       originalPrice: affiliateData.originalPrice,
       discountRate: affiliateData.discountRate,
-      currency: affiliateData.currency,
       rating: affiliateData.rating,
       reviewCount: affiliateData.reviewCount,
       imageUrl: images?.localPaths[0] || images?.urls[0] || affiliateData.imageUrl,
@@ -141,9 +135,19 @@ export class PostAssembler {
     // Benchmark: inject top-ranking Naver blog posts for the keyword as an
     // OPTIONAL `topPosts` field so templates can render a benchmark section.
     const keyword = benchmarkKeyword || affiliateData.name || affiliateData.categoryName || '';
-    const topPosts = await this.fetchBenchmarkPosts(keyword);
+    const topPosts = await fetchTopPosts(keyword);
     if (topPosts.length > 0) {
       templateData.topPosts = topPosts;
+    }
+
+    // Keyword insight: SCH_TRND trend + SHPP_INST shopping clicks + blog-search
+    // related keywords, surfaced to templates as an OPTIONAL `keywordInsight`.
+    const insight = await fetchKeywordInsight(keyword);
+    if (insight) {
+      templateData.keywordInsight = insight;
+      if (!seoData?.keywords?.length) {
+        templateData.seoKeywords = insight.relatedKeywords;
+      }
     }
 
     // LLM first-person experience copy (Q3). Optional; when absent the template
@@ -187,34 +191,7 @@ export class PostAssembler {
     return this._contentGenerator;
   }
 
-  private async fetchBenchmarkPosts(keyword: string): Promise<TopPost[]> {
-    if (!keyword) return [];
-    try {
-      const cm = getConfigManager();
-      const hubConfig = cm.getKeywordProviderConfig('naver-api-hub');
-      if (!hubConfig?.apiKey || !hubConfig?.apiSecret) return [];
-      const { NaverApiHubKeywordProvider } = await import('../intelligence/NaverApiHubProvider.js');
-      const provider = new NaverApiHubKeywordProvider(hubConfig);
-      const res = (await provider.searchBlog(keyword, 10)) as {
-        items?: Array<Record<string, unknown>>;
-      };
-      const items = res?.items ?? [];
-      return items.slice(0, 10).map((i) => ({
-        title: stripHtml(String(i.title ?? '')),
-        bloggername: String(i.bloggername ?? ''),
-        link: String(i.link ?? ''),
-        snippet: stripHtml(String(i.description ?? '')),
-      }));
-    } catch (error) {
-      logger.warn(
-        { keyword, error: String(error) },
-        'Benchmark post fetch failed; continuing without topPosts',
-      );
-      return [];
-    }
-  }
-
-  private generatePlatformContent(
+  generatePlatformContent(
     renderResult: TemplateRenderResult,
     platform: string | undefined,
     affiliateData: AffiliateProduct,
