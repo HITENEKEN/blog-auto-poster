@@ -6,15 +6,21 @@
   "types": "dist/index.d.ts",
   "scripts": {
     "build": "tsc",
+    "build:platforms": "tsc -p tsconfig.platforms.json",
     "cli": "node -r ./scripts/path-alias.js dist/cli/index.js",
     "dev": "ts-node -r tsconfig-paths/register src/cli/index.ts",
-    "lint": "eslint src --ext .ts",
+    "lint": "eslint .",
+    "lint:fix": "eslint . --fix",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "prepare": "husky",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "test:watch": "vitest",
     "test:coverage": "vitest run --coverage",
     "smoke": "node -r ./scripts/path-alias.js dist/cli/index.js research 테스트 --limit=3",
-    "config:wizard": "npm run cli -- config"
+    "pretest:e2e": "npm run build && cd src/web/client && npx vite build",
+    "test:e2e": "playwright test"
   },
   "keywords": [
     "blog",
@@ -54,6 +60,7 @@
     "uuid": "^10.0.0"
   },
   "devDependencies": {
+    "@playwright/test": "^1.62.1",
     "@types/better-sqlite3": "^7.6.11",
     "@types/cheerio": "^0.22.35",
     "@types/handlebars": "^4.1.0",
@@ -61,17 +68,29 @@
     "@types/node": "^20.14.10",
     "@types/node-cron": "^3.0.11",
     "@types/uuid": "^10.0.0",
-    "@typescript-eslint/eslint-plugin": "^7.17.0",
-    "@typescript-eslint/parser": "^7.17.0",
     "@vitest/coverage-v8": "^2.0.4",
     "eslint": "^9.7.0",
+    "eslint-plugin-react-hooks": "^5.2.0",
+    "globals": "^15.15.0",
+    "husky": "^9.1.7",
+    "lint-staged": "^15.5.2",
     "prettier": "^3.3.3",
     "ts-node": "^10.9.2",
     "tsconfig-paths": "^4.2.0",
     "typescript": "^5.5.3",
+    "typescript-eslint": "^8.68.0",
     "vitest": "^2.0.4"
   },
   "engines": {
     "node": ">=20.0.0"
+  },
+  "lint-staged": {
+    "*.{ts,tsx}": [
+      "eslint --fix",
+      "prettier --write"
+    ],
+    "*.{js,mjs,cjs,json,yml,yaml,css}": [
+      "prettier --write"
+    ]
   }
 }

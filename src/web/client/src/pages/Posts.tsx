@@ -1,12 +1,12 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { api } from '../services/api';
 import { PostSummary } from '@shared/types';
-import { Card, CardContent, CardHeader, CardTitle } from './ui/Card';
+import { Card, CardContent } from './ui/Card';
 import { Button } from './ui/Button';
 import { Input } from './ui/Input';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from './ui/Select';
 import { Badge } from './ui/Badge';
-import { FileText, Globe, RefreshCw, ExternalLink, MoreVertical, Edit, Trash2 } from 'lucide-react';
+import { FileText, RefreshCw, ExternalLink } from 'lucide-react';
 import { formatDistanceToNow } from 'date-fns';
 import { clsx } from 'clsx';
 
@@ -31,11 +31,7 @@ export default function Posts() {
     limit: 20,
   });
 
-  useEffect(() => {
-    fetchPosts();
-  }, [page, filters]);
-
-  const fetchPosts = async () => {
+  const fetchPosts = useCallback(async () => {
     setLoading(true);
     try {
       const params = new URLSearchParams({
@@ -53,7 +49,10 @@ export default function Posts() {
     } finally {
       setLoading(false);
     }
-  };
+  }, [page, filters]);
+  useEffect(() => {
+    fetchPosts();
+  }, [fetchPosts]);
 
   const handlePublish = async (post: PostSummary) => {
     try {
@@ -81,8 +80,13 @@ export default function Posts() {
       <Card>
         <CardContent className="p-4">
           <div className="flex flex-wrap gap-4">
-            <Select value={filters.status} onValueChange={(v) => setFilters({ ...filters, status: v })} >
-              <SelectTrigger className="w-[180px]"><SelectValue placeholder="상태" /></SelectTrigger>
+            <Select
+              value={filters.status}
+              onValueChange={(v) => setFilters({ ...filters, status: v })}
+            >
+              <SelectTrigger className="w-[180px]">
+                <SelectValue placeholder="상태" />
+              </SelectTrigger>
               <SelectContent>
                 <SelectItem value="">전체</SelectItem>
                 <SelectItem value="published">발행됨</SelectItem>
@@ -91,8 +95,13 @@ export default function Posts() {
                 <SelectItem value="draft">초안</SelectItem>
               </SelectContent>
             </Select>
-            <Select value={filters.platform} onValueChange={(v) => setFilters({ ...filters, platform: v })} >
-              <SelectTrigger className="w-[180px]"><SelectValue placeholder="플랫폼" /></SelectTrigger>
+            <Select
+              value={filters.platform}
+              onValueChange={(v) => setFilters({ ...filters, platform: v })}
+            >
+              <SelectTrigger className="w-[180px]">
+                <SelectValue placeholder="플랫폼" />
+              </SelectTrigger>
               <SelectContent>
                 <SelectItem value="">전체</SelectItem>
                 <SelectItem value="tistory">티스토리</SelectItem>
@@ -146,12 +155,23 @@ export default function Posts() {
                           </div>
                         </td>
                         <td className="py-3">
-                          <Badge variant="outline" className="capitalize">{post.platform}</Badge>
+                          <Badge variant="outline" className="capitalize">
+                            {post.platform}
+                          </Badge>
                         </td>
                         <td className="py-3 text-sm text-muted-foreground">{post.template}</td>
                         <td className="py-3">
-                          <Badge className={clsx(statusColors[post.status as keyof typeof statusColors] || statusColors.draft)}>
-                            {post.status === 'published' ? '발행됨' : post.status === 'failed' ? '실패' : post.status}
+                          <Badge
+                            className={clsx(
+                              statusColors[post.status as keyof typeof statusColors] ||
+                                statusColors.draft,
+                            )}
+                          >
+                            {post.status === 'published'
+                              ? '발행됨'
+                              : post.status === 'failed'
+                                ? '실패'
+                                : post.status}
                           </Badge>
                         </td>
                         <td className="py-3 text-sm text-muted-foreground">
@@ -161,13 +181,22 @@ export default function Posts() {
                           <div className="flex items-center gap-2">
                             {post.url && (
                               <Button variant="ghost" size="icon" asChild>
-                                <a href={post.url} target="_blank" rel="noopener noreferrer" title="보기">
+                                <a
+                                  href={post.url}
+                                  target="_blank"
+                                  rel="noopener noreferrer"
+                                  title="보기"
+                                >
                                   <ExternalLink className="h-4 w-4" />
                                 </a>
                               </Button>
                             )}
                             {post.status !== 'published' && (
-                              <Button variant="outline" size="sm" onClick={() => handlePublish(post)}>
+                              <Button
+                                variant="outline"
+                                size="sm"
+                                onClick={() => handlePublish(post)}
+                              >
                                 발행
                               </Button>
                             )}
@@ -183,13 +212,24 @@ export default function Posts() {
               {total > filters.limit && (
                 <div className="flex items-center justify-between border-t pt-4">
                   <p className="text-sm text-muted-foreground">
-                    총 {total}개 중 {(page - 1) * filters.limit + 1}~{Math.min(page * filters.limit, total)}개
+                    총 {total}개 중 {(page - 1) * filters.limit + 1}~
+                    {Math.min(page * filters.limit, total)}개
                   </p>
                   <div className="flex gap-2">
-                    <Button variant="outline" size="sm" onClick={() => setPage(p => Math.max(1, p - 1))} disabled={page === 1}>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={() => setPage((p) => Math.max(1, p - 1))}
+                      disabled={page === 1}
+                    >
                       이전
                     </Button>
-                    <Button variant="outline" size="sm" onClick={() => setPage(p => p + 1)} disabled={page * filters.limit >= total}>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={() => setPage((p) => p + 1)}
+                      disabled={page * filters.limit >= total}
+                    >
                       다음
                     </Button>
                   </div>

@@ -1,0 +1,46 @@
+app:
+  name: 'blog-auto-poster-e2e'
+  env: 'e2e'
+  logLevel: 'warn'
+  dataDir: './data'
+  outputDir: './output'
+  cacheDir: './.cache'
+affiliates:
+  coupang: { enabled: false }
+platforms:
+  tistory: { enabled: false }
+  wordpress: { enabled: false }
+  youtube-shorts: { enabled: false }
+  naver: { enabled: false }
+imageProviders:
+  dalle: { enabled: false }
+  stable-diffusion: { enabled: false }
+  gemini: { enabled: false }
+keywordProviders:
+  naver: { enabled: false }
+  google-trends: { enabled: false }
+  coupang: { enabled: false }
+  naver-api-hub:
+    enabled: true
+    apiKey: 'e2e-key-id'
+    apiSecret: 'e2e-key-secret'
+    baseUrl: 'http://127.0.0.1:4600'
+keywords:
+  topSeeds: ['무선청소기']
+scheduler:
+  enabled: false
+  timezone: 'Asia/Seoul'
+  jobs: []
+templates:
+  dir: './templates'
+  defaultTemplate: 'coupang-product-review'
+  validation: true
+web:
+  enabled: true
+  jwtSecret: 'e2e-jwt-secret-verification-only'
+  jwtExpiresIn: '1h'
+  auth:
+    disabled: false
+  cors:
+    origin:
+      - 'http://127.0.0.1:4173'
