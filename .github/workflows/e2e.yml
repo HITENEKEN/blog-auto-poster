@@ -20,8 +20,9 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with: { node-version: 20, cache: npm }
+      - run: node --version && node -e "const db=require('better-sqlite3')(':memory:'); db.exec('CREATE TABLE t(a)'); db.prepare('INSERT INTO t VALUES (1)').run(); console.log('sqlite smoke OK', db.prepare('SELECT a FROM t').get())"
+      - run: npm run build:platforms
+      - run: npm run build
       - run: npm ci
       - run: npm ci
         working-directory: src/web/client
