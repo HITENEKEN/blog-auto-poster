@@ -141,8 +141,10 @@ export async function createWebServer(options: WebServerOptions): Promise<Fastif
     };
   });
 
-  // Auth middleware
-  await app.register(authMiddleware, { configManager });
+  // Auth middleware — invoked directly (not via app.register) so its preHandler
+  // hook lands in THIS scope; app.register would isolate it in a child plugin
+  // context and none of the registerRoutes below would be JWT-protected.
+  await authMiddleware(app, { configManager });
 
   // Register API routes
   await registerRoutes(app, {

@@ -32,7 +32,11 @@ export async function authMiddleware(
 
   // Add hook to verify JWT on protected routes
   app.addHook('preHandler', async (request: FastifyRequest, reply: FastifyReply) => {
-    if (isPublicRoute(request.url)) {
+    // Guard only /api/* endpoints. Non-API routes must stay public: the
+    // not-found handler serves index.html for client-side SPA routes, and this
+    // hook runs for that handler too — an unconditional check would 401 every
+    // deep link (/login, /keywords, ...) instead of serving the app shell.
+    if (!request.url.startsWith('/api/') || isPublicRoute(request.url)) {
       return;
     }
 
