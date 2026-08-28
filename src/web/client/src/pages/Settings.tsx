@@ -199,7 +199,11 @@ function hydrateFromConfig(cfg: ServerConfig | undefined, base: SettingsData): S
   if (llm)
     next.llm = {
       provider: llm.provider ?? 'gemini',
-      apiKey: llm.apiKey ?? '',
+      // '***' 센티널 왕복: GET /api/config는 설정된 키를 '***'로 마스킹해 내려온다.
+      // 마스킹 값을 그대로 상태에 두어 저장 시 PUT llm.apiKey='***'가 되고,
+      // mergeConfig는 '***'를 스킵하므로 저장된 키가 보존된다.
+      // (''로 치환하면 무수정 저장이 실제 키를 지우게 되므로 금지.)
+      apiKey: llm.apiKey && llm.apiKey !== '' ? '***' : '',
       model: llm.model ?? 'gemini-1.5-pro',
     };
   if (ip.gemini)
@@ -567,7 +571,15 @@ export default function Settings() {
                 'text',
                 settings.llm.provider === 'openai' ? 'gpt-4o-mini' : 'gemini-1.5-pro',
               )}
-              {renderInput('llm', 'apiKey', 'API Key', 'password', '••••••••')}
+              <div>
+                {renderInput('llm', 'apiKey', 'API Key', 'password', '••••••••')}
+                {/* '***'는 서버가 마스킹한 저장된 키. 변경할 때만 새 키를 입력하면 된다. */}
+                {settings.llm.apiKey === '***' && (
+                  <p className="mt-1 text-xs text-muted-foreground">
+                    저장된 키가 있습니다(변경 시에만 새 키 입력)
+                  </p>
+                )}
+              </div>
             </CardContent>
           </Card>
           <div className="flex gap-2">
