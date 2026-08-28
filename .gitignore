@@ -13,6 +13,7 @@ output/
 
 # Secrets (never commit)
 config/secrets.yaml
+config/development.yaml
 .env
 
 # OS files
