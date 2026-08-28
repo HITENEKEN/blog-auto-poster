@@ -519,25 +519,51 @@ export class ContentGenerator {
  * section when present, otherwise reuses the Gemini image-provider key
  * (same Gemini API key, used here for text generation).
  */
+export function resolveLlmConfigFromConfigManager(): ContentGeneratorConfig {
+  const cm = getConfigManager();
+  const llm = (cm.get('llm') as Record<string, unknown>) || {};
+  const gemini = (cm.get('imageProviders.gemini') as Record<string, unknown>) || {};
+  const source = Object.keys(llm).length ? llm : gemini;
+  const provider =
+    (source.provider as string) ||
+    (llm.provider as string) ||
+    (gemini.provider as string) ||
+    'gemini';
+  return {
+    provider,
+    // 복사-붙여넣기 키의 앞뒤 공백/개행이 Authorization 헤더를 깨뜨리므로 원천에서 trim한다.
+    apiKey: ((source.apiKey as string) || '').trim(),
+    // 설정된 모델이 없으면 프로바이더 기본 모델로 폴백한다.
+    model: (source.model as string) || LLM_PROVIDERS[provider]?.defaultModel || 'gemini-1.5-pro',
+    baseUrl: (llm.baseUrl as string) || '',
+  };
+}
+
+/**
+ * 저장된 설정 위에 연결 테스트 요청 본문(입력 중인 폼 값)을 덧씌운다.
+ * apiKey는 '***' 마스킹 센티널이거나 없으면 저장된 키를, 그 외에는 본문 키를 사용하며
+ * 모든 문자열 필드는 trim한다. 순수 함수라 단위 테스트 가능하다.
+ */
+export function resolveLlmValidateConfig(
+  saved: ContentGeneratorConfig,
+  override: Partial<ContentGeneratorConfig> | undefined,
+): ContentGeneratorConfig {
+  const ov = override || {};
+  const trim = (v: unknown): string => (typeof v === 'string' ? v.trim() : '');
+
+  const provider = trim(ov.provider) || trim(saved.provider);
+  const apiKey =
+    (trim(ov.apiKey) && trim(ov.apiKey) !== '***' ? trim(ov.apiKey) : '') || trim(saved.apiKey);
+  const model = trim(ov.model) || trim(saved.model) || LLM_PROVIDERS[provider]?.defaultModel || '';
+  const baseUrl = trim(ov.baseUrl) || trim(saved.baseUrl);
+
+  return { provider, apiKey, model, baseUrl };
+}
+
 export function createContentGeneratorFromConfig(): ContentGenerator {
   let cfg: ContentGeneratorConfig = {};
   try {
-    const cm = getConfigManager();
-    const llm = (cm.get('llm') as Record<string, unknown>) || {};
-    const gemini = (cm.get('imageProviders.gemini') as Record<string, unknown>) || {};
-    const source = Object.keys(llm).length ? llm : gemini;
-    const provider =
-      (source.provider as string) ||
-      (llm.provider as string) ||
-      (gemini.provider as string) ||
-      'gemini';
-    cfg = {
-      provider,
-      apiKey: (source.apiKey as string) || '',
-      // 설정된 모델이 없으면 프로바이더 기본 모델로 폴백한다.
-      model: (source.model as string) || LLM_PROVIDERS[provider]?.defaultModel || 'gemini-1.5-pro',
-      baseUrl: (llm.baseUrl as string) || '',
-    };
+    cfg = resolveLlmConfigFromConfigManager();
   } catch {
     cfg = {};
   }

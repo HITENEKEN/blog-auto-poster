@@ -327,7 +327,14 @@ export default function Settings() {
   const handleValidateLlm = async () => {
     setValidatingLlm(true);
     try {
-      const res = await api.post('/api/llm/validate');
+      const res = await api.post('/api/llm/validate', {
+        // 폼에 입력 중인 값으로 검증한다(저장 전 테스트). '***'는 마스킹 센티널이므로
+        // 생략해 서버가 저장된 키를 사용하도록 한다.
+        provider: settings.llm.provider,
+        apiKey: settings.llm.apiKey === '***' ? undefined : settings.llm.apiKey.trim(),
+        model: settings.llm.model,
+        baseUrl: settings.llm.baseUrl,
+      });
       const result = res.data as { ok: boolean; model?: string; error?: string };
       if (result.ok) {
         toast({

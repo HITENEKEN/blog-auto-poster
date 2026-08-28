@@ -13,7 +13,13 @@ import type { CronScheduler } from '@scheduler/CronScheduler';
 import type { JobQueueImpl, PublishedPostRow } from '@scheduler/JobQueue';
 import type { PlatformRegistry } from '@platforms/registry';
 import type { BlogInfo } from '../../shared/types';
-import { createContentGeneratorFromConfig, LLM_PROVIDERS } from '@content/ContentGenerator';
+import {
+  ContentGenerator,
+  LLM_PROVIDERS,
+  resolveLlmConfigFromConfigManager,
+  resolveLlmValidateConfig,
+  type ContentGeneratorConfig,
+} from '@content/ContentGenerator';
 import { fetchLlmModels } from '@content/LlmModels';
 import { createTemplateEngine } from '@content/TemplateEngine';
 import { createImageGenerator } from '@content/ImageGenerator';
@@ -145,10 +151,23 @@ export async function registerRoutes(app: FastifyInstance, context: RouteContext
     return { success: true };
   });
 
-  // LLM 연결 테스트: 저장된 설정으로 최소 completion 한 번을 수행한다.
-  // 설정 해석은 createContentGeneratorFromConfig와 동일(llm 섹션 우선, 없으면 imageProviders.gemini).
-  app.post('/api/llm/validate', async () => {
-    return createContentGeneratorFromConfig().validateConnection();
+  // LLM 연결 테스트: 최소 completion 한 번을 수행한다.
+  // 본문이 있으면(저장 전 테스트) 폼에 입력 중인 프로바이더/키/모델을 저장 설정 위에 덧씌우고,
+  // 본문이 없으면 기존처럼 저장된 설정으로 검증한다(llm 섹션 우선, 없으면 imageProviders.gemini).
+  app.post('/api/llm/validate', async (request) => {
+    const raw = request.body as unknown;
+    const override =
+      raw && typeof raw === 'object' && !Array.isArray(raw)
+        ? (raw as Partial<ContentGeneratorConfig>)
+        : undefined;
+    let saved: ContentGeneratorConfig = {};
+    try {
+      saved = resolveLlmConfigFromConfigManager();
+    } catch {
+      saved = {};
+    }
+    const cfg = resolveLlmValidateConfig(saved, override);
+    return new ContentGenerator(cfg).validateConnection();
   });
 
   // LLM 모델 목록 조회: 저장된 apiKey(마스킹 전 원본)로 프로바이더의 /models를 호출한다.
@@ -158,7 +177,7 @@ export async function registerRoutes(app: FastifyInstance, context: RouteContext
     if (!LLM_PROVIDERS[provider]) {
       return { provider, models: [], error: '지원하지 않는 프로바이더입니다' };
     }
-    const apiKey = configManager.get<string>('llm.apiKey', '');
+    const apiKey = (configManager.get<string>('llm.apiKey', '') || '').trim();
     if (!apiKey) {
       return {
         provider,
