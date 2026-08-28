@@ -86,4 +86,22 @@ test.describe('templates', () => {
       expect(body.templates.some((t) => t.filename === filename)).toBe(true);
     }
   });
+
+  // Plan Verification 2: coupang-product-review.hbs must carry the affiliate
+  // disclosure (쿠팡 파트너스) at the top of its body
+  // (templates/coupang-product-review.hbs:39-41). Checked on the raw preview
+  // response — the UI preview dialog (iframe srcdoc) renders the same html.
+  test('coupang-product-review preview response includes the affiliate disclosure', async ({
+    page,
+  }) => {
+    const token = await getAuthToken(page);
+    const res = await page.request.post('/api/templates/coupang-product-review/preview', {
+      headers: authHeaders(token),
+      data: {},
+    });
+    expect(res.ok()).toBeTruthy();
+    const body = (await res.json()) as { html?: string; error?: string };
+    expect(body.error).toBeUndefined();
+    expect(body.html).toContain('쿠팡 파트너스');
+  });
 });
