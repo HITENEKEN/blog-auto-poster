@@ -4,7 +4,18 @@ import { Button } from './ui/Button';
 import { Input } from './ui/Input';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from './ui/Tabs';
 import { Label } from './ui/Label';
-import { Save, Shield, Bell, Database, Key, Globe, RefreshCw, Upload, Trash2 } from 'lucide-react';
+import {
+  Save,
+  Shield,
+  Bell,
+  Database,
+  Key,
+  Globe,
+  RefreshCw,
+  Upload,
+  Trash2,
+  Sparkles,
+} from 'lucide-react';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from './ui/Select';
 import { toast } from './ui/use-toast';
 import { api } from '../services/api';
@@ -35,6 +46,7 @@ interface SettingsData {
     stableDiffusion: { apiKey: string; apiUrl: string };
     gemini: { apiKey: string; model: string };
   };
+  llm: { provider: string; apiKey: string; model: string };
   notifications: {
     email: string;
     slackWebhook: string;
@@ -56,6 +68,7 @@ const defaultSettings: SettingsData = {
     stableDiffusion: { apiKey: '', apiUrl: 'https://api.stability.ai' },
     gemini: { apiKey: '', model: 'gemini-1.5-pro' },
   },
+  llm: { provider: 'gemini', apiKey: '', model: 'gemini-1.5-pro' },
   notifications: { email: '', slackWebhook: '', discordWebhook: '' },
 };
 
@@ -94,6 +107,8 @@ function toServerPayload(section: string, settings: SettingsData): Record<string
           gemini: settings.imageProviders.gemini,
         },
       };
+    case 'llm':
+      return { llm: settings.llm };
     case 'notifications':
       return { notifications: settings.notifications };
     default:
@@ -117,6 +132,7 @@ interface ServerConfig {
       clientSecret?: string;
     };
   };
+  llm?: { provider?: string; apiKey?: string; model?: string };
   imageProviders?: {
     dalle?: { apiKey?: string; model?: string };
     'stable-diffusion'?: { apiKey?: string; apiUrl?: string };
@@ -179,6 +195,13 @@ function hydrateFromConfig(cfg: ServerConfig | undefined, base: SettingsData): S
       apiKey: ip['stable-diffusion'].apiKey ?? '',
       apiUrl: ip['stable-diffusion'].apiUrl ?? 'https://api.stability.ai',
     };
+  const llm = cfg?.llm;
+  if (llm)
+    next.llm = {
+      provider: llm.provider ?? 'gemini',
+      apiKey: llm.apiKey ?? '',
+      model: llm.model ?? 'gemini-1.5-pro',
+    };
   if (ip.gemini)
     next.imageProviders.gemini = {
       apiKey: ip.gemini.apiKey ?? '',
@@ -191,6 +214,7 @@ export default function Settings() {
   const [settings, setSettings] = useState<SettingsData>(defaultSettings);
   const [saving, setSaving] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState('general');
+  const [validatingLlm, setValidatingLlm] = useState(false);
 
   useEffect(() => {
     // Source of truth is the server; fall back to localStorage/defaults if unreachable.
@@ -236,6 +260,7 @@ export default function Settings() {
       const next: SettingsData = JSON.parse(JSON.stringify(prev));
       const parts = String(section).split('.');
       let cursor: Record<string, unknown> = next as unknown as Record<string, unknown>;
+
       for (let i = 0; i < parts.length - 1; i++) {
         cursor[parts[i]] = cursor[parts[i]] ? { ...cursor[parts[i]] } : {};
         cursor = cursor[parts[i]] as Record<string, unknown>;
@@ -244,6 +269,34 @@ export default function Settings() {
       cursor[last] = { ...(cursor[last] || {}), [field]: value };
       return next;
     });
+  };
+
+  const handleValidateLlm = async () => {
+    setValidatingLlm(true);
+    try {
+      const res = await api.post('/api/llm/validate');
+      const result = res.data as { ok: boolean; model?: string; error?: string };
+      if (result.ok) {
+        toast({
+          title: '연결 성공',
+          description: result.model ? `모델: ${result.model}` : 'LLM 연결이 정상입니다.',
+        });
+      } else {
+        toast({
+          title: '연결 실패',
+          description: result.error || '알 수 없는 오류',
+          variant: 'destructive',
+        });
+      }
+    } catch {
+      toast({
+        title: '연결 실패',
+        description: '서버에 연결할 수 없습니다.',
+        variant: 'destructive',
+      });
+    } finally {
+      setValidatingLlm(false);
+    }
   };
 
   const renderInput = (
@@ -275,7 +328,7 @@ export default function Settings() {
       </div>
 
       <Tabs value={activeTab} onValueChange={setActiveTab} className="w-full">
-        <TabsList className="grid w-full grid-cols-6">
+        <TabsList className="grid w-full grid-cols-7">
           <TabsTrigger value="general">
             <Globe className="h-4 w-4 mr-2" />
             일반
@@ -291,6 +344,10 @@ export default function Settings() {
           <TabsTrigger value="images">
             <Shield className="h-4 w-4 mr-2" />
             이미지 생성
+          </TabsTrigger>
+          <TabsTrigger value="llm">
+            <Sparkles className="h-4 w-4 mr-2" />
+            AI 글쓰기 (LLM)
           </TabsTrigger>
           <TabsTrigger value="notifications">
             <Bell className="h-4 w-4 mr-2" />
@@ -471,6 +528,66 @@ export default function Settings() {
             )}
             저장
           </Button>
+        </TabsContent>
+
+        <TabsContent value="llm" className="mt-4 space-y-4">
+          <Card>
+            <CardHeader>
+              <CardTitle>AI 글쓰기 (LLM)</CardTitle>
+            </CardHeader>
+            <CardContent className="grid gap-4 md:grid-cols-2">
+              <div className="space-y-1">
+                <Label>프로바이더</Label>
+                <Select
+                  value={settings.llm.provider}
+                  onValueChange={(v: string) => {
+                    handleChange('llm', 'provider', v);
+                    const defaults =
+                      v === 'openai'
+                        ? { old: 'gemini-1.5-pro', next: 'gpt-4o-mini' }
+                        : { old: 'gpt-4o-mini', next: 'gemini-1.5-pro' };
+                    if (!settings.llm.model || settings.llm.model === defaults.old) {
+                      handleChange('llm', 'model', defaults.next);
+                    }
+                  }}
+                >
+                  <SelectTrigger>
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="gemini">Gemini (기본)</SelectItem>
+                    <SelectItem value="openai">OpenAI</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+              {renderInput(
+                'llm',
+                'model',
+                '모델',
+                'text',
+                settings.llm.provider === 'openai' ? 'gpt-4o-mini' : 'gemini-1.5-pro',
+              )}
+              {renderInput('llm', 'apiKey', 'API Key', 'password', '••••••••')}
+            </CardContent>
+          </Card>
+          <div className="flex gap-2">
+            <Button onClick={() => handleSave('llm')} disabled={saving === 'llm'}>
+              {saving === 'llm' ? (
+                <RefreshCw className="h-4 w-4 animate-spin mr-2" />
+              ) : (
+                <Save className="h-4 w-4 mr-2" />
+              )}
+              저장
+            </Button>
+            <Button variant="outline" onClick={handleValidateLlm} disabled={validatingLlm}>
+              {validatingLlm ? (
+                <RefreshCw className="h-4 w-4 animate-spin mr-2" />
+              ) : (
+                <Sparkles className="h-4 w-4 mr-2" />
+              )}
+              연결 테스트
+            </Button>
+          </div>
         </TabsContent>
 
         <TabsContent value="notifications" className="mt-4 space-y-4">

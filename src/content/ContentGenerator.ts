@@ -355,6 +355,22 @@ export class ContentGenerator {
   }
 
   /**
+   * 설정된 프로바이더/모델/키로 최소 completion 한 번을 수행해 연결 가능 여부를
+   * 확인한다. 네트워크/인증 오류는 ok=false와 에러 메시지로 반환한다(throw 없음).
+   */
+  async validateConnection(): Promise<{ ok: boolean; model?: string; error?: string }> {
+    if (!this.apiKey) {
+      return { ok: false, error: 'API 키가 설정되지 않았습니다' };
+    }
+    try {
+      await this.complete('JSON만 출력', '다음 JSON을 그대로 출력하세요: {"ok":true}');
+      return { ok: true, model: this.model };
+    } catch (error) {
+      return { ok: false, error: error instanceof Error ? error.message : String(error) };
+    }
+  }
+
+  /**
    * buildPrompt와 동일한 시스템 규칙(1인칭 경험체, 벤치마크 표절 금지)에
    * 템플릿 데이터 생성용 규칙을 더해 (system, user) 프롬프트를 만든다.
    */

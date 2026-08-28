@@ -13,6 +13,7 @@ import type { CronScheduler } from '@scheduler/CronScheduler';
 import type { JobQueueImpl, PublishedPostRow } from '@scheduler/JobQueue';
 import type { PlatformRegistry } from '@platforms/registry';
 import type { BlogInfo } from '../../shared/types';
+import { createContentGeneratorFromConfig } from '@content/ContentGenerator';
 import { createTemplateEngine } from '@content/TemplateEngine';
 import { createImageGenerator } from '@content/ImageGenerator';
 import { createPostAssembler } from '@content/PostAssembler';
@@ -141,6 +142,12 @@ export async function registerRoutes(app: FastifyInstance, context: RouteContext
     }
 
     return { success: true };
+  });
+
+  // LLM 연결 테스트: 저장된 설정으로 최소 completion 한 번을 수행한다.
+  // 설정 해석은 createContentGeneratorFromConfig와 동일(llm 섹션 우선, 없으면 imageProviders.gemini).
+  app.post('/api/llm/validate', async () => {
+    return createContentGeneratorFromConfig().validateConnection();
   });
 
   // Dashboard stats
