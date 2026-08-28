@@ -105,28 +105,11 @@ test.describe('posts', () => {
     await expect(draftRow).toBeVisible();
   });
 
-  // KNOWN PRODUCT BUG — expected failure, NOT papered over.
-  // /posts/:id/edit renders a blank page: TipTap schema compilation throws
-  //   SyntaxError: Mixing inline and block content (in content expression 'inline*')
-  // and React unmounts the whole tree (empty #root, no contenteditable).
-  //
-  // Root cause: src/web/client/src/components/Editor/nodes.tsx:283-286 —
-  // EditorImage declares `group: 'inline block'` WITHOUT `inline: true`, so the
-  // 'inline' group contains a non-inline node and prosemirror-model rejects the
-  // schema on EVERY RichEditor mount — PostEditor (/posts/:id/edit) AND the
-  // Templates WYSIWYG mode (RichEditor.tsx:80 mounts EditorImage unconditionally).
-  // Verified with an isolated repro: getSchema([StarterKit, CoupangWidget,
-  // StyleBlock, HbsToken, EditorImage, HtmlBlock, HtmlInline, LinkMark]) throws
-  // the exact error above. Merely adding `inline: true` flips the error to
-  // "Mixing inline and block content (in content expression 'block+')" — a node
-  // cannot sit in BOTH groups against StarterKit's 'block+'/'inline*' content
-  // expressions. The fix must commit EditorImage to a single group (e.g.
-  // `group: 'inline', inline: true` as in prosemirror-schema-basic's image).
-  //
-  // test.fail() keeps the plan's acceptance assertions executable: once the
-  // product is fixed, Playwright reports "expected to fail but passed" and the
-  // wrapper must be removed.
-  test.fail('shows the WYSIWYG editor on /posts/:id/edit', async ({ page }) => {
+  // Editor visible on /posts/:id/edit — plan acceptance. Previously expected
+  // to fail: EditorImage's dual 'inline block' group declaration crashed the
+  // TipTap schema ("Mixing inline and block content"), white-screening the
+  // editor. Fixed in 56292a0 (nodes.tsx: `group: 'inline'` + `inline: true`).
+  test('shows the WYSIWYG editor on /posts/:id/edit', async ({ page }) => {
     test.setTimeout(60_000);
     await login(page);
     const token = await getAuthToken(page);
