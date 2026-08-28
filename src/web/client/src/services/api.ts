@@ -23,10 +23,18 @@ api.interceptors.request.use(
 );
 
 // Response interceptor for error handling
+// Auth endpoints manage their own 401 flows (Login.tsx renders the server's
+// error message), so they must not be hijacked into the refresh/reload path.
+const AUTH_REQUEST_URLS = ['/api/auth/login', '/api/auth/refresh'];
+
 api.interceptors.response.use(
   (response) => response,
   async (error) => {
-    if (error.response?.status === 401) {
+    const requestUrl: unknown = error.config?.url;
+    const isAuthRequest =
+      typeof requestUrl === 'string' && AUTH_REQUEST_URLS.some((url) => requestUrl.startsWith(url));
+
+    if (error.response?.status === 401 && !isAuthRequest) {
       // Token expired, try to refresh
       try {
         await axios.post(

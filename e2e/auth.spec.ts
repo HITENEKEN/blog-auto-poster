@@ -11,16 +11,11 @@ test.describe('auth', () => {
   });
 
   // Wrong credentials → 401 from server (middleware/auth.ts:93-96, message
-  // "Username or password is incorrect").
-  //
-  // NOTE: the plan's "401 message shown on screen" is NOT observable in the
-  // current client: api.ts:29-45 intercepts EVERY 401 (including the login
-  // response itself), attempts /api/auth/refresh, fails, and performs
-  // `window.location.href = '/login'` — a full reload that unmounts Login.tsx
-  // before its error div (Login.tsx:43-47) can render. So we assert the 401
-  // at the network level plus the resulting UI state (stays on /login, no
-  // token) — the only stable observable behavior.
-  test('wrong password is rejected with server 401 message', async ({ page }) => {
+  // "Username or password is incorrect") rendered in Login.tsx's error div
+  // (Login.tsx:43-47, set from err.response.data.message at :25-28).
+  // api.ts excludes /api/auth/* from the refresh/reload interceptor so the
+  // error state survives; assert both the network response and the UI.
+  test('shows server 401 message on wrong password', async ({ page }) => {
     await page.goto('/login');
     const form = page.locator('form');
     await form.locator('input').first().fill('e2e-admin');
@@ -34,6 +29,9 @@ test.describe('auth', () => {
     const body = (await resp.json()) as { message?: string };
     expect(body.message).toBe('Username or password is incorrect');
 
+    // Server message visibly rendered in the form's error div; no navigation
+    // away, no token stored.
+    await expect(form.getByText('Username or password is incorrect')).toBeVisible();
     await expect(page).toHaveURL(/\/login$/);
     expect(await page.evaluate(() => localStorage.getItem('token'))).toBeNull();
   });
