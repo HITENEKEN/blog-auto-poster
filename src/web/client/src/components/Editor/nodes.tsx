@@ -282,7 +282,8 @@ export const StyleBlock = Node.create({
 
 export const EditorImage = Node.create({
   name: 'editorImage',
-  group: 'inline block',
+  group: 'inline',
+  inline: true,
   atom: true,
 
   addAttributes() {
