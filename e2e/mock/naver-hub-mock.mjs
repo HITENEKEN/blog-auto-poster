@@ -1,3 +1,4 @@
+/* eslint-disable no-console -- stdout request logging is this script's purpose */
 // Naver API Hub mock server — zero dependencies (node:http only).
 // Mirrors NaverApiSearchResponse / NaverApiBlogItem / NaverApiNewsItem from
 // src/intelligence/NaverApiHubProvider.ts:15-42. The `title` field echoes the
