@@ -1,5 +1,7 @@
 import type { CoupangWidgetKind } from '../../content/CoupangWidgets';
 
+export type { CoupangWidgetKind };
+
 /** 클라이언트(에디터 위젯 버튼/칩) 공용 위젯 라벨 — vite alias `@shared`로 import */
 export const COUPANG_WIDGET_LABELS: Record<CoupangWidgetKind, string> = {
   'product-link': '상품 링크',

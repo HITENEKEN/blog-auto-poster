@@ -10,6 +10,9 @@
     "lint": "cd ../.. && npx eslint src/web/client"
   },
   "dependencies": {
+    "@tiptap/pm": "^2.5.0",
+    "@tiptap/react": "^2.5.0",
+    "@tiptap/starter-kit": "^2.5.0",
     "axios": "^1.6.0",
     "clsx": "^2.1.1",
     "date-fns": "^2.30.0",

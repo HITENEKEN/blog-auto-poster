@@ -8,6 +8,7 @@ import Blogs from './pages/Blogs';
 import Coupang from './pages/Coupang';
 import Keywords from './pages/Keywords';
 import Posts from './pages/Posts';
+import PostEditor from './pages/PostEditor';
 import Scheduler from './pages/Scheduler';
 import Templates from './pages/Templates';
 import Settings from './pages/Settings';
@@ -48,6 +49,7 @@ function App() {
           <Route path="coupang" element={<Coupang />} />
           <Route path="keywords" element={<Keywords />} />
           <Route path="posts" element={<Posts />} />
+          <Route path="posts/:id/edit" element={<PostEditor />} />
           <Route path="scheduler" element={<Scheduler />} />
           <Route path="templates" element={<Templates />} />
           <Route path="settings" element={<Settings />} />

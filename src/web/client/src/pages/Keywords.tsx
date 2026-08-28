@@ -1,4 +1,5 @@
-import React, { useState, useEffect } from 'react';
+import { useState, useEffect } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { isAxiosError } from 'axios';
 import { api } from '../services/api';
 import { Card, CardContent, CardHeader, CardTitle } from './ui/Card';
@@ -14,7 +15,9 @@ import {
   ExternalLink,
   BarChart3,
   Users,
+  FilePlus2,
 } from 'lucide-react';
+import { Dialog } from './ui/dialog';
 
 interface KeywordResult {
   keyword: string;
@@ -86,6 +89,7 @@ function TrendBadge({ trend }: { trend: string }) {
 }
 
 export default function Keywords() {
+  const navigate = useNavigate();
   const [query, setQuery] = useState('');
   const [limit, setLimit] = useState(20);
   const [loading, setLoading] = useState(false);
@@ -96,6 +100,50 @@ export default function Keywords() {
   const [topLoading, setTopLoading] = useState(true);
   const [topError, setTopError] = useState('');
 
+  // 새 포스트 작성 다이얼로그 상태
+  const [postDialogKeyword, setPostDialogKeyword] = useState<string | null>(null);
+  const [templates, setTemplates] = useState<{ name: string; filename: string }[]>([]);
+  const [selectedTemplate, setSelectedTemplate] = useState('');
+  const [generating, setGenerating] = useState(false);
+  const [generateError, setGenerateError] = useState('');
+
+  const openPostDialog = async (keyword: string) => {
+    setPostDialogKeyword(keyword);
+    setSelectedTemplate('');
+    setGenerateError('');
+    try {
+      const response = await api.get('/api/templates');
+      const list = (response.data.templates || []) as { name: string; filename: string }[];
+      setTemplates(list);
+      setSelectedTemplate(list[0]?.name ?? '');
+    } catch {
+      setTemplates([]);
+    }
+  };
+
+  const handleGeneratePost = async () => {
+    if (!postDialogKeyword || !selectedTemplate) return;
+    setGenerating(true);
+    setGenerateError('');
+    try {
+      const response = await api.post<{ post: { id: string } }>(
+        '/api/posts/generate-from-keyword',
+        {
+          keyword: postDialogKeyword,
+          template: selectedTemplate,
+        },
+      );
+      setPostDialogKeyword(null);
+      navigate(`/posts/${response.data.post.id}/edit`);
+    } catch (err) {
+      setGenerateError(
+        (isAxiosError<{ error?: string }>(err) && err.response?.data?.error) ||
+          '포스트 생성에 실패했습니다.',
+      );
+    } finally {
+      setGenerating(false);
+    }
+  };
   useEffect(() => {
     (async () => {
       setTopLoading(true);
@@ -152,7 +200,8 @@ export default function Keywords() {
             <th className="pb-3 pr-4 font-medium">추정 검색량</th>
             <th className="pb-3 pr-4 font-medium">경쟁도</th>
             <th className="pb-3 pr-4 font-medium">트렌드</th>
-            <th className="pb-3 font-medium">연관 키워드</th>
+            <th className="pb-3 pr-4 font-medium">연관 키워드</th>
+            <th className="pb-3 font-medium">액션</th>
           </tr>
         </thead>
         <tbody>
@@ -169,8 +218,18 @@ export default function Keywords() {
               <td className="py-3 pr-4">
                 <TrendBadge trend={kw.trend} />
               </td>
-              <td className="py-3 text-sm text-muted-foreground max-w-xs truncate">
+              <td className="py-3 pr-4 text-sm text-muted-foreground max-w-xs truncate">
                 {(kw.related || []).slice(0, 5).join(', ') || '-'}
+              </td>
+              <td className="py-3">
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => openPostDialog(kw.keyword)}
+                  title={`${kw.keyword} 키워드로 새 포스트 작성`}
+                >
+                  <FilePlus2 className="mr-2 h-3 w-3" />새 포스트 작성
+                </Button>
               </td>
             </tr>
           ))}
@@ -261,45 +320,7 @@ export default function Keywords() {
               </Badge>
             )}
           </CardHeader>
-          <CardContent>
-            <div className="overflow-x-auto">
-              <table className="w-full">
-                <thead>
-                  <tr className="border-b text-left text-sm text-muted-foreground">
-                    <th className="pb-3 pr-4 font-medium">#</th>
-                    <th className="pb-3 pr-4 font-medium">키워드</th>
-                    <th className="pb-3 pr-4 font-medium">추정 검색량</th>
-                    <th className="pb-3 pr-4 font-medium">경쟁도</th>
-                    <th className="pb-3 pr-4 font-medium">트렌드</th>
-                    <th className="pb-3 font-medium">연관 키워드</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {sortedKeywords.map((kw, i) => (
-                    <tr
-                      key={kw.keyword + i}
-                      className="border-b hover:bg-muted/50 transition-colors"
-                    >
-                      <td className="py-3 pr-4 font-mono text-sm text-muted-foreground">{i + 1}</td>
-                      <td className="py-3 pr-4 font-medium">{kw.keyword}</td>
-                      <td className="py-3 pr-4">
-                        {kw.volume > 0 ? `~${kw.volume.toLocaleString()}` : '-'}
-                      </td>
-                      <td className="py-3 pr-4">
-                        <CompetitionBar value={kw.competition} />
-                      </td>
-                      <td className="py-3 pr-4">
-                        <TrendBadge trend={kw.trend} />
-                      </td>
-                      <td className="py-3 text-sm text-muted-foreground max-w-xs truncate">
-                        {kw.related.slice(0, 5).join(', ') || '-'}
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          </CardContent>
+          <CardContent>{renderKeywordTable(sortedKeywords)}</CardContent>
         </Card>
       )}
 
@@ -387,6 +408,51 @@ export default function Keywords() {
           </CardContent>
         </Card>
       )}
+
+      {/* 새 포스트 작성 다이얼로그 */}
+      <Dialog
+        open={postDialogKeyword !== null}
+        onClose={() => setPostDialogKeyword(null)}
+        title={`새 포스트 작성: ${postDialogKeyword ?? ''}`}
+        footer={
+          <>
+            <Button variant="outline" onClick={() => setPostDialogKeyword(null)}>
+              취소
+            </Button>
+            <Button onClick={handleGeneratePost} disabled={generating || !selectedTemplate}>
+              {generating ? (
+                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+              ) : (
+                <FilePlus2 className="mr-2 h-4 w-4" />
+              )}
+              생성
+            </Button>
+          </>
+        }
+      >
+        <div className="space-y-3">
+          <p className="text-sm text-muted-foreground">
+            템플릿을 선택하면 AI가 키워드 기반 포스트 초안을 생성합니다.
+          </p>
+          <select
+            className="h-10 w-full rounded-md border border-input bg-background px-3 text-sm disabled:cursor-not-allowed disabled:opacity-50"
+            value={selectedTemplate}
+            onChange={(e) => setSelectedTemplate(e.target.value)}
+            disabled={templates.length === 0}
+          >
+            {templates.length === 0 ? (
+              <option value="">템플릿이 없습니다</option>
+            ) : (
+              templates.map((t) => (
+                <option key={t.name} value={t.name}>
+                  {t.name}
+                </option>
+              ))
+            )}
+          </select>
+          {generateError && <p className="text-sm text-destructive">{generateError}</p>}
+        </div>
+      </Dialog>
     </div>
   );
 }

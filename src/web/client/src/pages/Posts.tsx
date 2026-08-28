@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useCallback } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { api } from '../services/api';
 import { PostSummary } from '@shared/types';
 import { Card, CardContent } from './ui/Card';
@@ -6,7 +7,7 @@ import { Button } from './ui/Button';
 import { Input } from './ui/Input';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from './ui/Select';
 import { Badge } from './ui/Badge';
-import { FileText, RefreshCw, ExternalLink } from 'lucide-react';
+import { FileText, RefreshCw, ExternalLink, Pencil } from 'lucide-react';
 import { formatDistanceToNow } from 'date-fns';
 import { clsx } from 'clsx';
 
@@ -20,10 +21,14 @@ const statusColors = {
 };
 
 export default function Posts() {
+  const navigate = useNavigate();
   const [posts, setPosts] = useState<PostSummary[]>([]);
   const [loading, setLoading] = useState(true);
   const [total, setTotal] = useState(0);
   const [page, setPage] = useState(1);
+  const [drafts, setDrafts] = useState<
+    { id: string; title: string; status: string; template: string; createdAt: string }[]
+  >([]);
   const [filters, setFilters] = useState({
     status: '',
     platform: '',
@@ -54,6 +59,21 @@ export default function Posts() {
     fetchPosts();
   }, [fetchPosts]);
 
+  useEffect(() => {
+    api
+      .get<{
+        drafts: {
+          id: string;
+          title: string;
+          status: string;
+          template: string;
+          createdAt: string;
+        }[];
+      }>('/api/posts/drafts')
+      .then((res) => setDrafts(res.data.drafts || []))
+      .catch(() => setDrafts([]));
+  }, []);
+
   const handlePublish = async (post: PostSummary) => {
     try {
       await api.post(`/api/posts/${post.id}/publish`, { platform: post.platform });
@@ -75,6 +95,50 @@ export default function Posts() {
           새로고침
         </Button>
       </div>
+
+      {/* 임시저장 드래프트 */}
+      {drafts.length > 0 && (
+        <Card>
+          <CardContent className="p-4">
+            <h2 className="mb-3 text-sm font-semibold">임시저장 드래프트</h2>
+            <div className="overflow-x-auto">
+              <table className="w-full">
+                <thead>
+                  <tr className="border-b text-left text-sm text-muted-foreground">
+                    <th className="pb-3 font-medium">제목</th>
+                    <th className="pb-3 font-medium">템플릿</th>
+                    <th className="pb-3 font-medium">생성일</th>
+                    <th className="pb-3 font-medium">액션</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {drafts.map((draft) => (
+                    <tr key={draft.id} className="border-b hover:bg-muted/50">
+                      <td className="py-3 font-medium">{draft.title || draft.id}</td>
+                      <td className="py-3 text-sm text-muted-foreground">{draft.template}</td>
+                      <td className="py-3 text-sm text-muted-foreground">
+                        {draft.createdAt
+                          ? formatDistanceToNow(new Date(draft.createdAt), { addSuffix: true })
+                          : '-'}
+                      </td>
+                      <td className="py-3">
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          onClick={() => navigate(`/posts/${draft.id}/edit`)}
+                        >
+                          <Pencil className="mr-2 h-3 w-3" />
+                          편집
+                        </Button>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </CardContent>
+        </Card>
+      )}
 
       {/* Filters */}
       <Card>

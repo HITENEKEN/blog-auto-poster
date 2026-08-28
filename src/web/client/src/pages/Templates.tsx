@@ -1,4 +1,6 @@
-import React, { useState, useEffect } from 'react';
+import { useState, useEffect } from 'react';
+import RichEditor from '../components/Editor/RichEditor';
+import { bodyToEditable, editableToHbsBody, splitRaw } from '@shared/hbsConvert';
 import { api } from '../services/api';
 import { Card, CardContent, CardHeader } from './ui/Card';
 import { Button } from './ui/Button';
@@ -16,6 +18,8 @@ import {
   X,
   Monitor,
   Smartphone,
+  Code2,
+  PenLine,
 } from 'lucide-react';
 
 interface TemplateInfo {
@@ -35,8 +39,10 @@ export default function Templates() {
   const [view, setView] = useState<ViewMode>('list');
   const [editingName, setEditingName] = useState<string | null>(null);
   const [editingContent, setEditingContent] = useState('');
-  const [isNewTemplate, setIsNewTemplate] = useState(false);
+  const [editMode, setEditMode] = useState<'source' | 'wysiwyg'>('source');
   const [newTemplateName, setNewTemplateName] = useState('');
+  const [wysiwygHtml, setWysiwygHtml] = useState('');
+  const [isNewTemplate, setIsNewTemplate] = useState(false);
   const [saving, setSaving] = useState(false);
   const [previewHtml, setPreviewHtml] = useState('');
   const [previewLoading, setPreviewLoading] = useState(false);
@@ -63,6 +69,7 @@ export default function Templates() {
       const response = await api.get(`/api/templates/${name}`);
       setEditingName(name);
       setEditingContent(response.data.raw || '');
+      setEditMode('source');
       setIsNewTemplate(false);
       setView('editor');
     } catch (error) {
@@ -85,8 +92,22 @@ seo:
 <div>
 <h1>{{productName}}</h1>
 </div>`);
+    setEditMode('source');
     setIsNewTemplate(true);
     setView('editor');
+  };
+
+  /** WYSIWYG → 소스 전환: 프론트매터 보존 + 편집된 body 반영 */
+  const switchToSource = () => {
+    const { frontmatter } = splitRaw(editingContent);
+    setEditingContent(frontmatter + editableToHbsBody(wysiwygHtml));
+    setEditMode('source');
+  };
+
+  /** 소스 → WYSIWYG 전환: body만 편집 대상으로 로드 */
+  const switchToWysiwyg = () => {
+    setWysiwygHtml(bodyToEditable(splitRaw(editingContent).body));
+    setEditMode('wysiwyg');
   };
 
   const handleSave = async () => {
@@ -94,9 +115,17 @@ seo:
     try {
       if (isNewTemplate) {
         if (!newTemplateName.trim()) return;
-        await api.post('/api/templates', { name: newTemplateName.trim(), content: editingContent });
+        const content =
+          editMode === 'wysiwyg'
+            ? splitRaw(editingContent).frontmatter + editableToHbsBody(wysiwygHtml)
+            : editingContent;
+        await api.post('/api/templates', { name: newTemplateName.trim(), content });
       } else if (editingName) {
-        await api.put(`/api/templates/${editingName}`, { content: editingContent });
+        const content =
+          editMode === 'wysiwyg'
+            ? splitRaw(editingContent).frontmatter + editableToHbsBody(wysiwygHtml)
+            : editingContent;
+        await api.put(`/api/templates/${editingName}`, { content });
       }
       setView('list');
       fetchTemplates();
@@ -355,16 +384,44 @@ seo:
 
       <Card>
         <CardContent className="p-4 space-y-4">
-          <textarea
-            value={editingContent}
-            onChange={(e) => setEditingContent(e.target.value)}
-            spellCheck={false}
-            className="w-full h-[500px] font-mono text-sm p-4 border rounded-md bg-zinc-950 text-green-400 resize-none focus:outline-none focus:ring-2 focus:ring-primary"
-            placeholder="Handlebars 템플릿을 입력하세요..."
-          />
+          <div className="flex items-center gap-1">
+            <Button
+              variant={editMode === 'source' ? 'default' : 'outline'}
+              size="sm"
+              onClick={switchToSource}
+              disabled={editMode === 'source'}
+              title="frontmatter/Handlebars 소스 편집"
+            >
+              <Code2 className="mr-1 h-4 w-4" />
+              소스
+            </Button>
+            <Button
+              variant={editMode === 'wysiwyg' ? 'default' : 'outline'}
+              size="sm"
+              onClick={switchToWysiwyg}
+              disabled={editMode === 'wysiwyg'}
+              title="본문 WYSIWYG 편집 (위젯 마커 삽입 가능)"
+            >
+              <PenLine className="mr-1 h-4 w-4" />
+              WYSIWYG
+            </Button>
+          </div>
+          {editMode === 'source' ? (
+            <textarea
+              value={editingContent}
+              onChange={(e) => setEditingContent(e.target.value)}
+              spellCheck={false}
+              className="w-full h-[500px] font-mono text-sm p-4 border rounded-md bg-zinc-950 text-green-400 resize-none focus:outline-none focus:ring-2 focus:ring-primary"
+              placeholder="Handlebars 템플릿을 입력하세요..."
+            />
+          ) : (
+            <RichEditor mode="template" content={wysiwygHtml} onUpdate={setWysiwygHtml} />
+          )}
           <div className="flex items-center justify-between">
             <p className="text-xs text-muted-foreground">
-              Handlebars 문법 지원: {'{{#each}}'}, {'{{#if}}'}, {'{{formatPrice price}}'} 등
+              {editMode === 'source'
+                ? 'Handlebars 문법 지원: {{#each}}, {{#if}}, {{formatPrice price}} 등'
+                : '위젯 버튼으로 커서 위치에 쿠팡 위젯을 삽입할 수 있습니다. frontmatter는 소스 모드에서 편집하세요.'}
             </p>
             <Button onClick={handleSave} disabled={saving}>
               {saving ? (
