@@ -306,6 +306,24 @@ export default function Settings() {
     });
   };
 
+  // 프로바이더 변경: provider 교체 + (필요하면) 모델/baseUrl을 새 프로바이더 기본 값으로 정리.
+  const handleProviderChange = (v: string) => {
+    handleChange('llm', 'provider', v);
+    const nextOpt = LLM_PROVIDER_OPTIONS.find((o) => o.value === v);
+    const prevOpt = LLM_PROVIDER_OPTIONS.find((o) => o.value === settings.llm.provider);
+    // 모델이 비었거나 이전 프로바이더의 기본 모델이면 새 기본 모델로 교체.
+    if (nextOpt && (!settings.llm.model || settings.llm.model === prevOpt?.defaultModel)) {
+      handleChange('llm', 'model', nextOpt.defaultModel);
+    }
+    // baseUrl이 다른 프로바이더의 기본 URL이면 리셋('' = 프로바이더 기본 사용).
+    if (nextOpt && settings.llm.baseUrl) {
+      const stale = LLM_PROVIDER_OPTIONS.some(
+        (o) => o.value !== v && o.defaultBaseUrl === settings.llm.baseUrl,
+      );
+      if (stale) handleChange('llm', 'baseUrl', '');
+    }
+  };
+
   const handleValidateLlm = async () => {
     setValidatingLlm(true);
     try {
@@ -574,39 +592,20 @@ export default function Settings() {
               <div className="space-y-1">
                 <Label>프로바이더</Label>
                 <Select
+                  id="provider"
                   value={settings.llm.provider}
-                  onValueChange={(v: string) => {
-                    handleChange('llm', 'provider', v);
-                    const nextOpt = LLM_PROVIDER_OPTIONS.find((o) => o.value === v);
-                    const prevOpt = LLM_PROVIDER_OPTIONS.find(
-                      (o) => o.value === settings.llm.provider,
-                    );
-                    // 모델이 비었거나 이전 프로바이더의 기본 모델이면 새 기본 모델로 교체.
-                    if (
-                      nextOpt &&
-                      (!settings.llm.model || settings.llm.model === prevOpt?.defaultModel)
-                    ) {
-                      handleChange('llm', 'model', nextOpt.defaultModel);
-                    }
-                    // baseUrl이 다른 프로바이더의 기본 URL이면 리셋('' = 프로바이더 기본 사용).
-                    if (nextOpt && settings.llm.baseUrl) {
-                      const stale = LLM_PROVIDER_OPTIONS.some(
-                        (o) => o.value !== v && o.defaultBaseUrl === settings.llm.baseUrl,
-                      );
-                      if (stale) handleChange('llm', 'baseUrl', '');
-                    }
-                  }}
+                  onChange={(e) => handleProviderChange(e.target.value)}
                 >
-                  <SelectTrigger>
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {LLM_PROVIDER_OPTIONS.map((opt) => (
-                      <SelectItem key={opt.value} value={opt.value}>
-                        {opt.label}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
+                  {!settings.llm.provider && (
+                    <option value="" disabled>
+                      프로바이더 선택
+                    </option>
+                  )}
+                  {LLM_PROVIDER_OPTIONS.map((opt) => (
+                    <option key={opt.value} value={opt.value}>
+                      {opt.label}
+                    </option>
+                  ))}
                 </Select>
               </div>
               <div className="space-y-1">
