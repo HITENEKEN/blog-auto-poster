@@ -26,11 +26,9 @@ jobs:
       - run: npm run build:platforms
       - run: npm run build
       - run: npm ci
-      - run: npm ci
         working-directory: src/web/client
       - run: npx vite build
         working-directory: src/web/client
-      - run: npm run build
       - run: npx playwright install chromium --with-deps
       - run: npx playwright test
       - if: failure()
