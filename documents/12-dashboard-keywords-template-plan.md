@@ -8,15 +8,15 @@
 
 ## 구현 결과 요약
 
-| 항목 | 상태 | 파일 |
-|------|------|------|
-| 파트너스 최적화 템플릿 3종 | ✅ | `templates/coupang-partner-review.hbs` 등 |
-| 템플릿 CRUD API (7개 엔드포인트) | ✅ | `src/web/server/routes/index.ts` |
-| 키워드 trending/research API (API Hub) | ✅ | `src/web/server/routes/index.ts` |
-| Keywords.tsx 재작성 (API Hub 연동) | ✅ | `src/web/client/src/pages/Keywords.tsx` |
-| Templates.tsx 재작성 (CRUD + 미리보기) | ✅ | `src/web/client/src/pages/Templates.tsx` |
-| 백엔드 TypeScript 빌드 | ✅ | `npm run build` |
-| 프론트엔드 Vite 프로덕션 빌드 | ✅ | `npx vite build` |
+| 항목                                   | 상태 | 파일                                      |
+| -------------------------------------- | ---- | ----------------------------------------- |
+| 파트너스 최적화 템플릿 3종             | ✅   | `templates/coupang-partner-review.hbs` 등 |
+| 템플릿 CRUD API (7개 엔드포인트)       | ✅   | `src/web/server/routes/index.ts`          |
+| 키워드 trending/research API (API Hub) | ✅   | `src/web/server/routes/index.ts`          |
+| Keywords.tsx 재작성 (API Hub 연동)     | ✅   | `src/web/client/src/pages/Keywords.tsx`   |
+| Templates.tsx 재작성 (CRUD + 미리보기) | ✅   | `src/web/client/src/pages/Templates.tsx`  |
+| 백엔드 TypeScript 빌드                 | ✅   | `npm run build`                           |
+| 프론트엔드 Vite 프로덕션 빌드          | ✅   | `npx vite build`                          |
 
 ---
 
@@ -25,13 +25,16 @@
 ### 구현된 백엔드 API
 
 **`GET /api/keywords/trending?q={키워드}&limit={N}`**
+
 - 네이버 API Hub 블로그 검색 → 볼륨/경쟁도/트렌드 산출
 - 경쟁 블로그 TOP N 반환
 
 **`GET /api/keywords/:keyword/blogs?limit={N}&sort={sim|date}`**
+
 - 특정 키워드의 경쟁 블로그 목록만 조회
 
 **`POST /api/keywords/research`**
+
 - `providers: ['naver-api-hub', 'coupang', ...]` 지원
 - API Hub + legacy 프로바이더 결과 병합, 스코어 순 정렬
 
@@ -55,11 +58,11 @@
 
 ### 생성된 템플릿
 
-| 파일 | 이름 | 용도 |
-|------|------|------|
-| `coupang-partner-review.hbs` | coupang-partner-review | 단일 제품 리뷰형 |
+| 파일                           | 이름                     | 용도             |
+| ------------------------------ | ------------------------ | ---------------- |
+| `coupang-partner-review.hbs`   | coupang-partner-review   | 단일 제품 리뷰형 |
 | `coupang-comparison-guide.hbs` | coupang-comparison-guide | 다중 제품 비교형 |
-| `coupang-buying-guide.hbs` | coupang-buying-guide | 초보자 가이드형 |
+| `coupang-buying-guide.hbs`     | coupang-buying-guide     | 초보자 가이드형  |
 
 ### 리뷰형 템플릿 구조 (10단계)
 
@@ -88,16 +91,17 @@
 
 ### 구현된 백엔드 API
 
-| 메서드 | 경로 | 설명 |
-|--------|------|------|
-| GET | `/api/templates` | 목록 (frontmatter 자동 파싱) |
-| GET | `/api/templates/:name` | 상세 (raw HBS 포함) |
-| POST | `/api/templates` | 생성 |
-| PUT | `/api/templates/:name` | 수정 |
-| DELETE | `/api/templates/:name` | 삭제 |
-| POST | `/api/templates/:name/preview` | 샘플 데이터 렌더링 |
+| 메서드 | 경로                           | 설명                         |
+| ------ | ------------------------------ | ---------------------------- |
+| GET    | `/api/templates`               | 목록 (frontmatter 자동 파싱) |
+| GET    | `/api/templates/:name`         | 상세 (raw HBS 포함)          |
+| POST   | `/api/templates`               | 생성                         |
+| PUT    | `/api/templates/:name`         | 수정                         |
+| DELETE | `/api/templates/:name`         | 삭제                         |
+| POST   | `/api/templates/:name/preview` | 샘플 데이터 렌더링           |
 
 ### Preview 엔드포인트 기능
+
 - Handlebars 헬퍼 자동 등록 (`formatPrice`, `renderStars`, `math`)
 - 각 템플릿 유형별 기본 샘플 데이터 자동 주입
 - 커스텀 샘플 데이터 오버라이드 가능

@@ -1,4 +1,4 @@
-import { createHttpClient, setAuthToken, clearAuthToken } from '@core/http';
+import { createHttpClient, setAuthToken } from '@core/http';
 import { getLogger } from '@core/logger';
 import {
   PlatformAdapter,
@@ -8,7 +8,13 @@ import {
   PlatformImage,
   PlatformFeature,
 } from '@core/interfaces';
-import { PlatformError, AuthenticationError, ValidationError, RateLimitError, isRetryableError } from '@core/errors';
+import {
+  PlatformError,
+  AuthenticationError,
+  ValidationError,
+  RateLimitError,
+  isRetryableError,
+} from '@core/errors';
 import FormData from 'form-data';
 import * as fs from 'fs';
 import * as path from 'path';
@@ -68,16 +74,7 @@ interface YouTubeUploadResponse {
   };
 }
 
-interface YouTubeThumbnailResponse {
-  items: Array<{
-    default: { url: string; width: number; height: number };
-    medium: { url: string; width: number; height: number };
-    high: { url: string; width: number; height: number };
-  }>;
-}
-
 const YOUTUBE_BASE_URL = 'https://www.googleapis.com/youtube/v3';
-const YOUTUBE_AUTH_URL = 'https://oauth2.googleapis.com/token';
 const YOUTUBE_UPLOAD_URL = 'https://www.googleapis.com/upload/youtube/v3';
 
 export class YouTubeShortsAdapter implements PlatformAdapter {
@@ -121,7 +118,7 @@ export class YouTubeShortsAdapter implements PlatformAdapter {
   async initialize(credentials: PlatformCredentials): Promise<void> {
     this.config = credentials;
 
-    const { clientId, clientSecret, refreshToken, accessToken, channelId } = credentials;
+    const { clientId, clientSecret, refreshToken, accessToken } = credentials;
 
     this.clientId = String(clientId || '');
     this.clientSecret = String(clientSecret || '');
@@ -132,7 +129,7 @@ export class YouTubeShortsAdapter implements PlatformAdapter {
       throw new AuthenticationError(
         'YouTube requires clientId and clientSecret',
         'youtube-shorts',
-        'credentials'
+        'api_key',
       );
     }
 
@@ -153,13 +150,17 @@ export class YouTubeShortsAdapter implements PlatformAdapter {
     throw new AuthenticationError(
       'YouTube requires either accessToken or refreshToken for initial setup',
       'youtube-shorts',
-      'credentials'
+      'access',
     );
   }
 
   private async refreshAccessToken(): Promise<void> {
     if (!this.refreshToken || !this.clientId || !this.clientSecret) {
-      throw new AuthenticationError('Missing credentials for token refresh', 'youtube-shorts', 'refresh');
+      throw new AuthenticationError(
+        'Missing credentials for token refresh',
+        'youtube-shorts',
+        'refresh',
+      );
     }
 
     try {
@@ -196,18 +197,21 @@ export class YouTubeShortsAdapter implements PlatformAdapter {
         `YouTube token refresh failed: ${String(error)}`,
         'youtube-shorts',
         'refresh',
-        error instanceof Error ? error : undefined
+        'AUTHENTICATION_FAILED',
+        401,
+        undefined,
+        error instanceof Error ? error : undefined,
       );
     }
   }
 
   private async ensureValidToken(): Promise<void> {
     if (!this.initialized || !this.accessToken) {
-      throw new AuthenticationError('YouTube adapter not initialized', 'youtube-shorts', 'init');
+      throw new AuthenticationError('YouTube adapter not initialized', 'youtube-shorts', 'access');
     }
 
     // Check if token is near expiry (within 5 minutes)
-    const expiresAt = this.config?.tokenExpiresAt || 0;
+    const expiresAt = Number(this.config?.tokenExpiresAt || 0);
     if (expiresAt > 0 && expiresAt <= Date.now() + 300000) {
       if (this.refreshToken) {
         await this.refreshAccessToken();
@@ -219,11 +223,21 @@ export class YouTubeShortsAdapter implements PlatformAdapter {
     await this.ensureValidToken();
 
     if (!content.videoPath) {
-      throw new ValidationError('videoPath is required for YouTube Shorts', 'youtube-shorts');
+      throw new ValidationError(
+        'videoPath is required for YouTube Shorts',
+        'youtube-shorts',
+        undefined,
+        [],
+      );
     }
 
     if (!fs.existsSync(content.videoPath)) {
-      throw new ValidationError(`Video file not found: ${content.videoPath}`, 'youtube-shorts');
+      throw new ValidationError(
+        `Video file not found: ${content.videoPath}`,
+        'youtube-shorts',
+        undefined,
+        [],
+      );
     }
 
     try {
@@ -246,7 +260,7 @@ export class YouTubeShortsAdapter implements PlatformAdapter {
       // Check if it's a Short (under 60 seconds)
       // We'll add #Shorts tag if not present
       const tags = [...(content.tags || [])];
-      if (!tags.some(t => t.toLowerCase() === 'shorts')) {
+      if (!tags.some((t) => t.toLowerCase() === 'shorts')) {
         tags.push('Shorts');
       }
       metadata.snippet.tags = tags;
@@ -260,7 +274,7 @@ export class YouTubeShortsAdapter implements PlatformAdapter {
             'X-Upload-Content-Type': 'video/*',
             'X-Upload-Content-Length': String(fs.statSync(content.videoPath).size),
           },
-        }
+        },
       );
 
       const uploadUrl = initResponse.headers.location;
@@ -270,31 +284,28 @@ export class YouTubeShortsAdapter implements PlatformAdapter {
 
       // Step 2: Upload video file
       const videoStream = fs.createReadStream(content.videoPath);
-      const uploadResponse = await this.uploadClient.put<YouTubeUploadResponse>(uploadUrl, videoStream, {
-        headers: {
-          'Content-Type': 'video/*',
+      const uploadResponse = await this.uploadClient.put<YouTubeUploadResponse>(
+        uploadUrl,
+        videoStream,
+        {
+          headers: {
+            'Content-Type': 'video/*',
+          },
+          timeout: 600000,
+          maxContentLength: Infinity,
+          maxBodyLength: Infinity,
         },
-        timeout: 600000,
-        maxContentLength: Infinity,
-        maxBodyLength: Infinity,
-      });
+      );
 
       const videoId = uploadResponse.data.id;
-      const videoUrl = `https://www.youtube.com/watch?v=${videoId}`;
       const shortsUrl = `https://www.youtube.com/shorts/${videoId}`;
-
-      // Step 3: Upload thumbnail if provided
-      if (content.thumbnailPath && fs.existsSync(content.thumbnailPath)) {
-        await this.setThumbnail(videoId, content.thumbnailPath);
-      }
 
       logger.info({ videoId, url: shortsUrl }, 'YouTube Short uploaded successfully');
 
       return {
         postId: videoId,
         url: shortsUrl,
-        platform: 'youtube-shorts',
-        publishedAt: new Date().toISOString(),
+        publishedAt: new Date(),
       };
     } catch (error) {
       logger.error({ error: String(error) }, 'Create YouTube Short failed');
@@ -302,39 +313,50 @@ export class YouTubeShortsAdapter implements PlatformAdapter {
     }
   }
 
-  async updatePost(postId: string, content: Partial<PlatformPostContent>): Promise<PlatformPostResult> {
+  async updatePost(
+    postId: string,
+    content: Partial<PlatformPostContent>,
+  ): Promise<PlatformPostResult> {
     await this.ensureValidToken();
 
     try {
-      const updateData: Record<string, unknown> = {
+      const updateData: {
+        id: string;
+        snippet?: Partial<YouTubeVideoResource['snippet']>;
+        status?: Partial<YouTubeVideoResource['status']>;
+      } = {
         id: postId,
       };
 
       if (content.title) updateData.snippet = { ...updateData.snippet, title: content.title };
       if (content.description || content.content) {
-        updateData.snippet = { ...updateData.snippet, description: content.description || content.content };
+        updateData.snippet = {
+          ...updateData.snippet,
+          description: content.description || content.content,
+        };
       }
       if (content.tags) updateData.snippet = { ...updateData.snippet, tags: content.tags };
-      if (content.categoryId) updateData.snippet = { ...updateData.snippet, categoryId: content.categoryId };
+      if (content.categoryId)
+        updateData.snippet = { ...updateData.snippet, categoryId: content.categoryId };
       if (content.visibility) {
-        updateData.status = { ...updateData.status, privacyStatus: content.visibility === 'private' ? 'private' : 'public' };
+        updateData.status = {
+          ...updateData.status,
+          privacyStatus: content.visibility === 'private' ? 'private' : 'public',
+        };
       }
 
-      const part = Object.keys(updateData).filter(k => k !== 'id').join(',');
+      const part = Object.keys(updateData)
+        .filter((k) => k !== 'id')
+        .join(',');
 
       await this.client.put<YouTubeVideoResource>(`/videos?part=${part}`, updateData);
-
-      if (content.thumbnailPath && fs.existsSync(content.thumbnailPath)) {
-        await this.setThumbnail(postId, content.thumbnailPath);
-      }
 
       const shortsUrl = `https://www.youtube.com/shorts/${postId}`;
 
       return {
         postId,
         url: shortsUrl,
-        platform: 'youtube-shorts',
-        publishedAt: new Date().toISOString(),
+        publishedAt: new Date(),
       };
     } catch (error) {
       logger.error({ postId, error: String(error) }, 'Update YouTube Short failed');
@@ -356,16 +378,12 @@ export class YouTubeShortsAdapter implements PlatformAdapter {
         filename: path.basename(thumbnailPath),
       });
 
-      await this.uploadClient.post(
-        `/videos/${videoId}/thumbnails/set`,
-        formData,
-        {
-          headers: {
-            ...formData.getHeaders(),
-          },
-          params: { videoId },
-        }
-      );
+      await this.uploadClient.post(`/videos/${videoId}/thumbnails/set`, formData, {
+        headers: {
+          ...formData.getHeaders(),
+        },
+        params: { videoId },
+      });
 
       logger.info({ videoId }, 'Thumbnail uploaded');
     } catch (error) {
@@ -373,7 +391,9 @@ export class YouTubeShortsAdapter implements PlatformAdapter {
     }
   }
 
-  async getCategories(blogName?: string): Promise<Array<{ id: string; name: string; slug?: string }>> {
+  async getCategories(
+    _blogName?: string,
+  ): Promise<Array<{ id: string; name: string; slug?: string }>> {
     // YouTube doesn't have traditional categories for Shorts, return common ones
     return [
       { id: '1', name: 'Film & Animation', slug: 'film' },
@@ -393,7 +413,7 @@ export class YouTubeShortsAdapter implements PlatformAdapter {
     ];
   }
 
-  async uploadImage(imagePath: string, options?: { filename?: string }): Promise<PlatformImage> {
+  async uploadImage(_imagePath: string, _options?: { filename?: string }): Promise<PlatformImage> {
     // YouTube uses thumbnails, not general image uploads
     // This is handled via setThumbnail
     throw new PlatformError('Use setThumbnail for YouTube', 'youtube-shorts', 'uploadImage', 400);
@@ -410,7 +430,12 @@ export class YouTubeShortsAdapter implements PlatformAdapter {
   }
 
   private handleError(error: unknown, operation: string): Error {
-    if (error instanceof PlatformError || error instanceof AuthenticationError || error instanceof ValidationError || error instanceof RateLimitError) {
+    if (
+      error instanceof PlatformError ||
+      error instanceof AuthenticationError ||
+      error instanceof ValidationError ||
+      error instanceof RateLimitError
+    ) {
       throw error;
     }
 
@@ -423,7 +448,7 @@ export class YouTubeShortsAdapter implements PlatformAdapter {
           502,
           true,
           { operation, originalError: error.message },
-          error
+          error,
         );
       }
     }
@@ -435,7 +460,7 @@ export class YouTubeShortsAdapter implements PlatformAdapter {
       502,
       false,
       { operation, originalError: String(error) },
-      error instanceof Error ? error : undefined
+      error instanceof Error ? error : undefined,
     );
   }
 }

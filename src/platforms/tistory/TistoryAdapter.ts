@@ -9,20 +9,18 @@ import {
   PlatformImage,
   PlatformFeature,
 } from '@core/interfaces';
-import { PlatformError, AuthenticationError, RateLimitError, ValidationError, isRetryableError } from '@core/errors';
+import {
+  PlatformError,
+  AuthenticationError,
+  RateLimitError,
+  ValidationError,
+  isRetryableError,
+} from '@core/errors';
 import FormData from 'form-data';
 import * as fs from 'fs';
 import * as path from 'path';
 
 const logger = getLogger('tistory-adapter');
-
-interface TistoryAuthResponse {
-  access_token: string;
-  refresh_token?: string;
-  token_type: string;
-  expires_in: number;
-  blog_name: string;
-}
 
 interface TistoryPostWriteResponse {
   status: string;
@@ -52,12 +50,6 @@ interface TistoryUploadResponse {
   status: string;
   url: string;
   replacer: string;
-}
-
-interface TistorySessionResponse {
-  status: string;
-  userId: string;
-  blogName: string;
 }
 
 const TISTORY_BASE_URL = 'https://www.tistory.com/apis';
@@ -108,7 +100,7 @@ export class TistoryAdapter implements PlatformAdapter {
       throw new AuthenticationError(
         'Tistory requires username, password, apiKey, and blogName',
         'tistory',
-        'credentials'
+        'api_key',
       );
     }
 
@@ -116,7 +108,12 @@ export class TistoryAdapter implements PlatformAdapter {
     this.initialized = true;
   }
 
-  private async authenticate(username: string, password: string, apiKey: string, blogName: string): Promise<void> {
+  private async authenticate(
+    username: string,
+    password: string,
+    apiKey: string,
+    blogName: string,
+  ): Promise<void> {
     try {
       // Tistory uses a custom authentication flow via web endpoints
       // We'll simulate the OAuth-like flow using the provided credentials
@@ -150,7 +147,7 @@ export class TistoryAdapter implements PlatformAdapter {
       // Extract cookies from login response
       const cookies = loginResponse.headers['set-cookie'];
       if (!cookies) {
-        throw new AuthenticationError('Login failed: no session cookie', 'tistory', 'login');
+        throw new AuthenticationError('Login failed: no session cookie', 'tistory', 'access');
       }
 
       // Store cookies for subsequent requests
@@ -163,10 +160,13 @@ export class TistoryAdapter implements PlatformAdapter {
         redirect_uri: 'https://www.tistory.com/oauth/callback',
       });
 
-      const tokenResponse = await authClient.get(`${TISTORY_AUTH_URL}/authorize?${tokenParams.toString()}`, {
-        maxRedirects: 0,
-        validateStatus: (status) => status < 400 || status === 302,
-      });
+      const tokenResponse = await authClient.get(
+        `${TISTORY_AUTH_URL}/authorize?${tokenParams.toString()}`,
+        {
+          maxRedirects: 0,
+          validateStatus: (status) => status < 400 || status === 302,
+        },
+      );
 
       // Extract access token from redirect URL fragment
       const location = tokenResponse.headers.location || '';
@@ -185,15 +185,18 @@ export class TistoryAdapter implements PlatformAdapter {
       throw new AuthenticationError(
         `Tistory authentication failed: ${String(error)}`,
         'tistory',
-        'login',
-        error instanceof Error ? error : undefined
+        'access',
+        'AUTHENTICATION_FAILED',
+        401,
+        undefined,
+        error instanceof Error ? error : undefined,
       );
     }
   }
 
   private async ensureAuthenticated(): Promise<void> {
     if (!this.initialized || !this.accessToken) {
-      throw new AuthenticationError('Tistory adapter not initialized', 'tistory', 'init');
+      throw new AuthenticationError('Tistory adapter not initialized', 'tistory', 'access');
     }
   }
 
@@ -215,7 +218,10 @@ export class TistoryAdapter implements PlatformAdapter {
       });
 
       if (content.scheduledAt) {
-        params.append('publishedAt', new Date(content.scheduledAt).toISOString().replace(/[-:]/g, '').split('.')[0]);
+        params.append(
+          'publishedAt',
+          new Date(content.scheduledAt).toISOString().replace(/[-:]/g, '').split('.')[0],
+        );
       }
 
       const response = await this.client.post<TistoryPostWriteResponse>('/post/write', params, {
@@ -231,17 +237,19 @@ export class TistoryAdapter implements PlatformAdapter {
           'createPost',
           502,
           true,
-          { response: response.data }
+          { response: response.data },
         );
       }
 
-      logger.info({ postId: response.data.postId, url: response.data.url }, 'Post created successfully');
+      logger.info(
+        { postId: response.data.postId, url: response.data.url },
+        'Post created successfully',
+      );
 
       return {
         postId: response.data.postId,
         url: response.data.url,
-        platform: 'tistory',
-        publishedAt: new Date().toISOString(),
+        publishedAt: new Date(),
       };
     } catch (error) {
       logger.error({ error: String(error) }, 'Create post failed');
@@ -249,7 +257,10 @@ export class TistoryAdapter implements PlatformAdapter {
     }
   }
 
-  async updatePost(postId: string, content: Partial<PlatformPostContent>): Promise<PlatformPostResult> {
+  async updatePost(
+    postId: string,
+    content: Partial<PlatformPostContent>,
+  ): Promise<PlatformPostResult> {
     await this.ensureAuthenticated();
 
     try {
@@ -264,7 +275,8 @@ export class TistoryAdapter implements PlatformAdapter {
       if (content.visibility) params.append('visibility', content.visibility);
       if (content.categoryId) params.append('category', String(content.categoryId));
       if (content.tags) params.append('tag', content.tags.join(','));
-      if (content.allowComments !== undefined) params.append('acceptComment', content.allowComments ? '1' : '0');
+      if (content.allowComments !== undefined)
+        params.append('acceptComment', content.allowComments ? '1' : '0');
 
       const response = await this.client.post<TistoryPostModifyResponse>('/post/modify', params, {
         headers: {
@@ -279,7 +291,7 @@ export class TistoryAdapter implements PlatformAdapter {
           'updatePost',
           502,
           true,
-          { response: response.data }
+          { response: response.data },
         );
       }
 
@@ -288,8 +300,7 @@ export class TistoryAdapter implements PlatformAdapter {
       return {
         postId: response.data.postId,
         url: response.data.url,
-        platform: 'tistory',
-        publishedAt: new Date().toISOString(),
+        publishedAt: new Date(),
       };
     } catch (error) {
       logger.error({ postId, error: String(error) }, 'Update post failed');
@@ -303,7 +314,12 @@ export class TistoryAdapter implements PlatformAdapter {
     try {
       const targetBlog = blogName || this.blogName;
       if (!targetBlog) {
-        throw new ValidationError('Blog name required for category fetch', 'tistory');
+        throw new ValidationError(
+          'Blog name required for category fetch',
+          'tistory',
+          undefined,
+          [],
+        );
       }
 
       const params = new URLSearchParams({
@@ -320,7 +336,7 @@ export class TistoryAdapter implements PlatformAdapter {
           'getCategories',
           502,
           true,
-          { response: response.data }
+          { response: response.data },
         );
       }
 
@@ -340,7 +356,7 @@ export class TistoryAdapter implements PlatformAdapter {
     await this.ensureAuthenticated();
 
     if (!fs.existsSync(imagePath)) {
-      throw new ValidationError(`Image file not found: ${imagePath}`, 'tistory');
+      throw new ValidationError(`Image file not found: ${imagePath}`, 'tistory', undefined, []);
     }
 
     try {
@@ -365,21 +381,18 @@ export class TistoryAdapter implements PlatformAdapter {
           'uploadImage',
           502,
           true,
-          { response: response.data }
+          { response: response.data },
         );
       }
 
       const fileName = path.basename(imagePath);
-      const stats = fs.statSync(imagePath);
 
       logger.info({ url: response.data.url, fileName }, 'Image uploaded successfully');
 
       return {
         url: response.data.url,
         localPath: imagePath,
-        filename: fileName,
-        size: stats.size,
-        mimeType: this.getMimeType(fileName),
+        altText: '',
       };
     } catch (error) {
       logger.error({ imagePath, error: String(error) }, 'Upload image failed');
@@ -397,21 +410,13 @@ export class TistoryAdapter implements PlatformAdapter {
     }
   }
 
-  private getMimeType(filename: string): string {
-    const ext = path.extname(filename).toLowerCase();
-    const mimeTypes: Record<string, string> = {
-      '.jpg': 'image/jpeg',
-      '.jpeg': 'image/jpeg',
-      '.png': 'image/png',
-      '.gif': 'image/gif',
-      '.webp': 'image/webp',
-      '.bmp': 'image/bmp',
-    };
-    return mimeTypes[ext] || 'application/octet-stream';
-  }
-
   private handleError(error: unknown, operation: string): Error {
-    if (error instanceof PlatformError || error instanceof AuthenticationError || error instanceof RateLimitError || error instanceof ValidationError) {
+    if (
+      error instanceof PlatformError ||
+      error instanceof AuthenticationError ||
+      error instanceof RateLimitError ||
+      error instanceof ValidationError
+    ) {
       throw error;
     }
 
@@ -424,7 +429,7 @@ export class TistoryAdapter implements PlatformAdapter {
           502,
           true,
           { operation, originalError: error.message },
-          error
+          error,
         );
       }
     }
@@ -436,7 +441,7 @@ export class TistoryAdapter implements PlatformAdapter {
       502,
       false,
       { operation, originalError: String(error) },
-      error instanceof Error ? error : undefined
+      error instanceof Error ? error : undefined,
     );
   }
 }

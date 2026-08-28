@@ -1,4 +1,3 @@
-// @ts-nocheck
 // Shared types between server and client
 
 export interface ApiResponse<T = unknown> {
@@ -177,7 +176,6 @@ export interface PublishResult {
   platform: string;
   postId?: string;
   url?: string;
-  platform?: string;
   publishedAt?: string;
   error?: string;
   success: boolean;

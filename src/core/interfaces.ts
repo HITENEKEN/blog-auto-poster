@@ -128,7 +128,10 @@ export interface PlatformAdapter {
   createPost(content: PlatformPostContent): Promise<PlatformPostResult>;
   updatePost(postId: string, content: Partial<PlatformPostContent>): Promise<PlatformPostResult>;
   getCategories(blogName?: string): Promise<PlatformCategory[]>;
-  uploadImage(imagePath: string, options?: { filename?: string; alt?: string; caption?: string }): Promise<PlatformImage>;
+  uploadImage(
+    imagePath: string,
+    options?: { filename?: string; alt?: string; caption?: string },
+  ): Promise<PlatformImage>;
   validateCredentials(): Promise<boolean>;
 }
 
@@ -338,7 +341,10 @@ export interface TopicSelectionConfig {
 }
 
 export interface TopicSelector {
-  select(candidates: TopicRecommendation[], config: TopicSelectionConfig): Promise<TopicRecommendation[]>;
+  select(
+    candidates: TopicRecommendation[],
+    config: TopicSelectionConfig,
+  ): Promise<TopicRecommendation[]>;
 }
 
 // ============================================================================
@@ -363,13 +369,7 @@ export interface PostContent {
   updatedAt: string;
 }
 
-export type PostStatus =
-  | 'DRAFT'
-  | 'GENERATING'
-  | 'READY'
-  | 'PUBLISHING'
-  | 'PUBLISHED'
-  | 'FAILED';
+export type PostStatus = 'DRAFT' | 'GENERATING' | 'READY' | 'PUBLISHING' | 'PUBLISHED' | 'FAILED';
 
 // ============================================================================
 // Scheduler Types
@@ -393,21 +393,10 @@ export interface Job {
 }
 
 export type JobType =
-  | 'RESEARCH'
-  | 'GENERATE'
-  | 'PUBLISH'
-  | 'SYNC_ANALYTICS'
-  | 'REFRESH_TOKEN'
-  | 'CLEANUP';
+  'RESEARCH' | 'GENERATE' | 'PUBLISH' | 'SYNC_ANALYTICS' | 'REFRESH_TOKEN' | 'CLEANUP';
 
 export type JobStatus =
-  | 'PENDING'
-  | 'QUEUED'
-  | 'RUNNING'
-  | 'COMPLETED'
-  | 'FAILED'
-  | 'RETRYING'
-  | 'DEAD_LETTER';
+  'PENDING' | 'QUEUED' | 'RUNNING' | 'COMPLETED' | 'FAILED' | 'RETRYING' | 'DEAD_LETTER';
 
 export interface JobQueue {
   enqueue(job: Omit<Job, 'id' | 'retryCount' | 'status'>): Promise<string>;
@@ -476,6 +465,10 @@ export interface ConfigManager {
   set(key: string, value: unknown): void;
   has(key: string): boolean;
   getAll(): Record<string, unknown>;
+  /** Deep-merge a partial config into the in-memory config, skipping '***' sentinel strings (masked secrets). */
+  mergeConfig(partial: Record<string, unknown>): void;
+  /** Persist the in-memory config to the loaded <env>.yaml (note: includes merged secrets for local test). */
+  save(): Promise<void>;
   getAffiliateConfig(name: string): AffiliateConfig | null;
   getPlatformConfig(name: string): PlatformCredentials | null;
   getImageProviderConfig(name: string): ImageProviderConfig | null;
@@ -538,6 +531,9 @@ export interface AppConfig {
     port: number;
     jwtSecret: string;
     jwtExpiresIn: string;
+    auth: {
+      disabled: boolean;
+    };
     cors: {
       origin: string;
       credentials: boolean;

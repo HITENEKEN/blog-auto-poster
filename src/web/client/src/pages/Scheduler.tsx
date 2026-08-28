@@ -1,10 +1,10 @@
 import React, { useEffect, useState } from 'react';
 import { api } from '../services/api';
-import { ScheduledJob, ScheduledJobConfig } from '@shared/types';
+import { ScheduledJob } from '@shared/types';
 import { Card, CardContent, CardHeader, CardTitle } from './ui/Card';
 import { Button } from './ui/Button';
 import { Badge } from './ui/Badge';
-import { Clock, Play, Pause, RefreshCw, Loader2, Settings } from 'lucide-react';
+import { Clock, Play, Pause, RefreshCw, Settings } from 'lucide-react';
 import { clsx } from 'clsx';
 
 const typeLabels: Record<string, string> = {
@@ -54,7 +54,7 @@ export default function Scheduler() {
   const handleToggle = async (job: ScheduledJob) => {
     try {
       await api.put('/api/scheduler/config', {
-        jobs: jobs.map(j => j.name === job.name ? { ...j, enabled: !j.enabled } : j),
+        jobs: jobs.map((j) => (j.name === job.name ? { ...j, enabled: !j.enabled } : j)),
       });
       fetchJobs();
     } catch (error) {
@@ -111,7 +111,10 @@ export default function Scheduler() {
           ) : (
             <div className="space-y-4">
               {jobs.map((job) => (
-                <div key={job.name} className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 p-4 rounded-lg border">
+                <div
+                  key={job.name}
+                  className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 p-4 rounded-lg border"
+                >
                   <div className="flex items-center gap-4 min-w-0">
                     <div className="p-2 rounded-lg bg-primary/10">
                       <Clock className="h-5 w-5 text-primary" />
@@ -120,7 +123,13 @@ export default function Scheduler() {
                       <div className="flex items-center gap-2">
                         <h4 className="font-medium truncate">{job.name}</h4>
                         <Badge variant="outline">{typeLabels[job.type] || job.type}</Badge>
-                        <Badge className={clsx(job.enabled ? 'bg-green-100 text-green-700' : 'bg-gray-100 text-gray-700')}>
+                        <Badge
+                          className={clsx(
+                            job.enabled
+                              ? 'bg-green-100 text-green-700'
+                              : 'bg-gray-100 text-gray-700',
+                          )}
+                        >
                           {job.enabled ? '활성' : '비활성'}
                         </Badge>
                       </div>
@@ -172,7 +181,10 @@ export default function Scheduler() {
               { expression: '0 */6 * * *', description: '6시간마다' },
               { expression: '0 0 * * 0', description: '매주 일요일 00:00' },
             ].map((item) => (
-              <div key={item.expression} className="p-3 rounded-lg bg-muted/50 flex items-center justify-between">
+              <div
+                key={item.expression}
+                className="p-3 rounded-lg bg-muted/50 flex items-center justify-between"
+              >
                 <code className="font-mono text-primary">{item.expression}</code>
                 <span className="text-muted-foreground">{item.description}</span>
               </div>

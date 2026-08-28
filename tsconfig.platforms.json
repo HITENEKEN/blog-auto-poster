@@ -1,0 +1,5 @@
+{
+  "extends": "./tsconfig.json",
+  "include": ["src/platforms/**/*", "src/core/**/*", "src/intelligence/NaverApiHubProvider.ts"],
+  "exclude": ["node_modules", "dist", "tests", "scripts", "src/web/client"]
+}

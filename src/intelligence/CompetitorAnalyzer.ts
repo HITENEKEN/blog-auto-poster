@@ -1,19 +1,38 @@
-// @ts-nocheck
 import { getLogger } from '@core/logger';
 import { getCache } from '@core/cache';
 import { createHttpClient } from '@core/http';
-import {
-  CompetitorAnalyzer,
-  CompetitorPost,
-  CompetitorAnalysisOptions,
-  TopicRecommendation,
-} from '@core/interfaces';
+import { CompetitorAnalyzer, CompetitorPost, CompetitorAnalysisOptions } from '@core/interfaces';
 import * as cheerio from 'cheerio';
-import Parser from 'rss-parser';
 
 const logger = getLogger('competitor-analyzer');
 
-const parser = new Parser();
+type NaverBlogSearchItem = {
+  title: string;
+  link: string;
+  description: string;
+  bloggername: string;
+  bloggerlink: string;
+  postdate: string;
+};
+
+type YouTubeSearchItem = {
+  id: { videoId?: string };
+  snippet: {
+    title: string;
+    description: string;
+    channelTitle: string;
+    channelId: string;
+    publishedAt: string;
+  };
+};
+
+type YouTubeVideoItem = {
+  id: string;
+  statistics?: { viewCount?: string; likeCount?: string };
+  contentDetails?: { duration?: string };
+};
+
+type YouTubeVideoStats = { views: number; likes: number; duration?: string };
 
 export class NaverBlogAnalyzer implements CompetitorAnalyzer {
   readonly name = 'naver-blog';
@@ -33,7 +52,11 @@ export class NaverBlogAnalyzer implements CompetitorAnalyzer {
     this.client.defaults.headers.common['X-Naver-Client-Secret'] = this.clientSecret;
   }
 
-  async analyze(keyword: string, platforms: string[] = ['naver-blog'], limit: number = 10): Promise<CompetitorPost[]> {
+  async analyze(
+    keyword: string,
+    platforms: string[] = ['naver-blog'],
+    limit: number = 10,
+  ): Promise<CompetitorPost[]> {
     if (!platforms.includes('naver-blog')) return [];
 
     const cacheKey = `analyze:${keyword}:${limit}`;
@@ -49,21 +72,22 @@ export class NaverBlogAnalyzer implements CompetitorAnalyzer {
         },
       });
 
-      const posts: CompetitorPost[] = response.data.items?.map((item: any, index: number) => ({
-        platform: 'naver-blog',
-        url: item.link,
-        title: this.stripHtml(item.title),
-        description: this.stripHtml(item.description),
-        blogName: item.bloggername,
-        blogUrl: item.bloggerlink,
-        publishDate: item.postdate,
-        views: 0, // Not provided by API
-        likes: 0,
-        structure: [],
-        affiliateLinks: [],
-        ctaPatterns: [],
-        score: this.calculateScore(index, limit),
-      })) || [];
+      const posts: CompetitorPost[] =
+        response.data.items?.map((item: NaverBlogSearchItem, index: number) => ({
+          platform: 'naver-blog',
+          url: item.link,
+          title: this.stripHtml(item.title),
+          description: this.stripHtml(item.description),
+          blogName: item.bloggername,
+          blogUrl: item.bloggerlink,
+          publishDate: item.postdate,
+          views: 0, // Not provided by API
+          likes: 0,
+          structure: [],
+          affiliateLinks: [],
+          ctaPatterns: [],
+          score: this.calculateScore(index, limit),
+        })) || [];
 
       // Fetch content for top posts to extract structure
       for (const post of posts.slice(0, 5)) {
@@ -87,13 +111,15 @@ export class NaverBlogAnalyzer implements CompetitorAnalyzer {
       const $ = cheerio.load(response.data);
 
       // Extract headings structure
-      const headings = $('h1, h2, h3, h4').map((_, el) => {
-        const tagName = (el as any).tagName || '';
-        return {
-          level: parseInt(tagName.charAt(1)) || 1,
-          text: $(el).text().trim(),
-        };
-      }).get();
+      const headings = $('h1, h2, h3, h4')
+        .map((_, el) => {
+          const tagName = 'tagName' in el ? el.tagName : '';
+          return {
+            level: parseInt(tagName.charAt(1)) || 1,
+            text: $(el).text().trim(),
+          };
+        })
+        .get();
 
       post.structure = headings;
 
@@ -101,13 +127,18 @@ export class NaverBlogAnalyzer implements CompetitorAnalyzer {
       post.metadata = { ...post.metadata, imageCount: $('img').length };
 
       // Find affiliate links
-      const affiliateLinks = $('a[href*="coupang"], a[href*="link.coupang"], a[href*="partners"]').map((_, el) => $(el).attr('href')).get();
+      const affiliateLinks = $('a[href*="coupang"], a[href*="link.coupang"], a[href*="partners"]')
+        .map((_, el) => $(el).attr('href'))
+        .get();
       post.affiliateLinks = affiliateLinks.filter(Boolean) as string[];
 
       // Extract CTA patterns
-      const ctaTexts = $('a, button').map((_, el) => $(el).text().trim()).get();
-      post.ctaPatterns = ctaTexts.filter(t => /구매|확인|자세히|더보기|최저가|할인/.test(t)).slice(0, 5);
-
+      const ctaTexts = $('a, button')
+        .map((_, el) => $(el).text().trim())
+        .get();
+      post.ctaPatterns = ctaTexts
+        .filter((t) => /구매|확인|자세히|더보기|최저가|할인/.test(t))
+        .slice(0, 5);
     } catch (error) {
       logger.warn({ url: post.url, error: String(error) }, 'Failed to enrich post');
     }
@@ -132,7 +163,11 @@ export class TistoryAnalyzer implements CompetitorAnalyzer {
   });
   private cache = getCache<CompetitorPost[]>('tistory-analysis');
 
-  async analyze(keyword: string, platforms: string[] = ['tistory'], limit: number = 10): Promise<CompetitorPost[]> {
+  async analyze(
+    keyword: string,
+    platforms: string[] = ['tistory'],
+    limit: number = 10,
+  ): Promise<CompetitorPost[]> {
     if (!platforms.includes('tistory')) return [];
 
     const cacheKey = `analyze:${keyword}:${limit}`;
@@ -195,24 +230,35 @@ export class TistoryAnalyzer implements CompetitorAnalyzer {
       const $ = cheerio.load(response.data);
 
       // Extract from article area
-      const headings = $('#content .article h1, #content .article h2, #content .article h3, .entry-content h1, .entry-content h2, .entry-content h3')
+      const headings = $(
+        '#content .article h1, #content .article h2, #content .article h3, .entry-content h1, .entry-content h2, .entry-content h3',
+      )
         .map((_, el) => {
-          const tagName = (el as any).tagName || '';
+          const tagName = 'tagName' in el ? el.tagName : '';
           return {
             level: parseInt(tagName.charAt(1)) || 1,
             text: $(el).text().trim(),
           };
-        }).get();
+        })
+        .get();
 
       post.structure = headings;
-      post.metadata = { ...post.metadata, imageCount: $('.entry-content img, #content .article img').length };
+      post.metadata = {
+        ...post.metadata,
+        imageCount: $('.entry-content img, #content .article img').length,
+      };
 
-      const affiliateLinks = $('a[href*="coupang"], a[href*="partners"]').map((_, el) => $(el).attr('href')).get();
+      const affiliateLinks = $('a[href*="coupang"], a[href*="partners"]')
+        .map((_, el) => $(el).attr('href'))
+        .get();
       post.affiliateLinks = affiliateLinks.filter(Boolean) as string[];
 
-      const ctaTexts = $('a, button').map((_, el) => $(el).text().trim()).get();
-      post.ctaPatterns = ctaTexts.filter(t => /구매|확인|자세히|더보기|최저가|할인/.test(t)).slice(0, 5);
-
+      const ctaTexts = $('a, button')
+        .map((_, el) => $(el).text().trim())
+        .get();
+      post.ctaPatterns = ctaTexts
+        .filter((t) => /구매|확인|자세히|더보기|최저가|할인/.test(t))
+        .slice(0, 5);
     } catch (error) {
       logger.warn({ url: post.url, error: String(error) }, 'Failed to enrich Tistory post');
     }
@@ -237,7 +283,11 @@ export class YouTubeAnalyzer implements CompetitorAnalyzer {
     this.apiKey = config.apiKey;
   }
 
-  async analyze(keyword: string, platforms: string[] = ['youtube'], limit: number = 10): Promise<CompetitorPost[]> {
+  async analyze(
+    keyword: string,
+    platforms: string[] = ['youtube'],
+    limit: number = 10,
+  ): Promise<CompetitorPost[]> {
     if (!platforms.includes('youtube') && !platforms.includes('youtube-shorts')) return [];
 
     const cacheKey = `analyze:${keyword}:${limit}`;
@@ -257,24 +307,28 @@ export class YouTubeAnalyzer implements CompetitorAnalyzer {
         },
       });
 
-      const posts: CompetitorPost[] = response.data.items?.map((item: any, index: number) => ({
-        platform: 'youtube',
-        url: `https://www.youtube.com/watch?v=${item.id.videoId}`,
-        title: item.snippet.title,
-        description: item.snippet.description,
-        channelName: item.snippet.channelTitle,
-        channelId: item.snippet.channelId,
-        publishDate: item.snippet.publishedAt,
-        views: 0, // Will be fetched separately
-        likes: 0,
-        structure: [],
-        affiliateLinks: [],
-        ctaPatterns: [],
-        score: this.calculateScore(index, limit),
-      })) || [];
+      const posts: CompetitorPost[] =
+        response.data.items?.map((item: YouTubeSearchItem, index: number) => ({
+          platform: 'youtube',
+          url: `https://www.youtube.com/watch?v=${item.id.videoId}`,
+          title: item.snippet.title,
+          description: item.snippet.description,
+          channelName: item.snippet.channelTitle,
+          channelId: item.snippet.channelId,
+          publishDate: item.snippet.publishedAt,
+          views: 0, // Will be fetched separately
+          likes: 0,
+          structure: [],
+          affiliateLinks: [],
+          ctaPatterns: [],
+          score: this.calculateScore(index, limit),
+        })) || [];
 
       // Fetch statistics for top videos
-      const videoIds = posts.slice(0, 10).map(p => p.url.split('v=')[1]).join(',');
+      const videoIds = posts
+        .slice(0, 10)
+        .map((p) => p.url.split('v=')[1])
+        .join(',');
       if (videoIds) {
         await this.enrichWithStats(posts, videoIds);
       }
@@ -297,18 +351,24 @@ export class YouTubeAnalyzer implements CompetitorAnalyzer {
         },
       });
 
-      const statsMap = new Map(response.data.items?.map((item: any) => [
-        item.id,
-        { views: parseInt(item.statistics?.viewCount || '0'), likes: parseInt(item.statistics?.likeCount || '0'), duration: item.contentDetails?.duration }
-      ]) || []);
+      const statsMap = new Map<string, YouTubeVideoStats>(
+        response.data.items?.map((item: YouTubeVideoItem): [string, YouTubeVideoStats] => [
+          item.id,
+          {
+            views: parseInt(item.statistics?.viewCount || '0'),
+            likes: parseInt(item.statistics?.likeCount || '0'),
+            duration: item.contentDetails?.duration,
+          },
+        ]) || [],
+      );
 
       for (const post of posts) {
         const videoId = post.url.split('v=')[1];
         const stats = statsMap.get(videoId);
         if (stats) {
-          (post as any).views = stats.views;
-          (post as any).likes = stats.likes;
-          (post as any).metadata = { ...(post as any).metadata, duration: stats.duration };
+          post.views = stats.views;
+          post.likes = stats.likes;
+          post.metadata = { ...post.metadata, duration: stats.duration };
         }
       }
     } catch (error) {
@@ -332,7 +392,10 @@ export class CompetitorAnalyzerRegistry {
     return this.analyzers.get(name);
   }
 
-  async analyze(keyword: string, options: CompetitorAnalysisOptions = {}): Promise<CompetitorPost[]> {
+  async analyze(
+    keyword: string,
+    options: CompetitorAnalysisOptions = {},
+  ): Promise<CompetitorPost[]> {
     const { platforms = ['naver-blog', 'tistory', 'youtube'], limit = 10 } = options;
     const allPosts: CompetitorPost[] = [];
 

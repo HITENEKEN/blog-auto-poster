@@ -9,7 +9,12 @@ import {
   PlatformImage,
   PlatformFeature,
 } from '@core/interfaces';
-import { PlatformError, AuthenticationError, ValidationError, isRetryableError } from '@core/errors';
+import {
+  PlatformError,
+  AuthenticationError,
+  ValidationError,
+  isRetryableError,
+} from '@core/errors';
 import FormData from 'form-data';
 import * as fs from 'fs';
 import * as path from 'path';
@@ -84,7 +89,10 @@ interface WordPressMedia {
     width: number;
     height: number;
     file: string;
-    sizes: Record<string, { file: string; width: number; height: number; mime_type: string; source_url: string }>;
+    sizes: Record<
+      string,
+      { file: string; width: number; height: number; mime_type: string; source_url: string }
+    >;
   };
   source_url: string;
   _links: Record<string, unknown>;
@@ -124,12 +132,17 @@ export class WordPressAdapter implements PlatformAdapter {
       throw new AuthenticationError(
         'WordPress requires url, username, and appPassword',
         'wordpress',
-        'credentials'
+        'api_key',
       );
     }
 
     this.client.defaults.baseURL = String(url).replace(/\/+$/, '') + '/wp-json/wp/v2';
-    setAuthToken(this.client, Buffer.from(`${username}:${appPassword}`).toString('base64'), 'basic');
+    setAuthToken(
+      this.client,
+      Buffer.from(`${username}:${appPassword}`).toString('base64'),
+      'api_key',
+      'Authorization',
+    );
 
     // Test connection
     try {
@@ -140,15 +153,18 @@ export class WordPressAdapter implements PlatformAdapter {
       throw new AuthenticationError(
         `WordPress authentication failed: ${String(error)}`,
         'wordpress',
-        'credentials',
-        error instanceof Error ? error : undefined
+        'access',
+        'AUTHENTICATION_FAILED',
+        401,
+        undefined,
+        error instanceof Error ? error : undefined,
       );
     }
   }
 
   private async ensureInitialized(): Promise<void> {
     if (!this.initialized) {
-      throw new AuthenticationError('WordPress adapter not initialized', 'wordpress', 'init');
+      throw new AuthenticationError('WordPress adapter not initialized', 'wordpress', 'access');
     }
   }
 
@@ -159,7 +175,11 @@ export class WordPressAdapter implements PlatformAdapter {
       const postData: Record<string, unknown> = {
         title: content.title,
         content: content.content,
-        status: content.scheduledAt ? 'future' : content.visibility === 'private' ? 'private' : 'publish',
+        status: content.scheduledAt
+          ? 'future'
+          : content.visibility === 'private'
+            ? 'private'
+            : 'publish',
         comment_status: content.allowComments ? 'open' : 'closed',
         ping_status: 'open',
         format: 'standard',
@@ -173,9 +193,6 @@ export class WordPressAdapter implements PlatformAdapter {
         const tagIds = await this.ensureTagsExist(content.tags);
         postData.tags = tagIds;
       }
-      if (content.featuredImageId) {
-        postData.featured_media = content.featuredImageId;
-      }
       if (content.scheduledAt) {
         postData.date = new Date(content.scheduledAt).toISOString();
       }
@@ -188,13 +205,15 @@ export class WordPressAdapter implements PlatformAdapter {
 
       const response = await this.client.post<WordPressPost>('/posts', postData);
 
-      logger.info({ postId: response.data.id, url: response.data.link }, 'Post created successfully');
+      logger.info(
+        { postId: response.data.id, url: response.data.link },
+        'Post created successfully',
+      );
 
       return {
         postId: String(response.data.id),
         url: response.data.link,
-        platform: 'wordpress',
-        publishedAt: response.data.date_gmt,
+        publishedAt: new Date(response.data.date_gmt),
       };
     } catch (error) {
       logger.error({ error: String(error) }, 'Create post failed');
@@ -202,7 +221,10 @@ export class WordPressAdapter implements PlatformAdapter {
     }
   }
 
-  async updatePost(postId: string, content: Partial<PlatformPostContent>): Promise<PlatformPostResult> {
+  async updatePost(
+    postId: string,
+    content: Partial<PlatformPostContent>,
+  ): Promise<PlatformPostResult> {
     await this.ensureInitialized();
 
     try {
@@ -223,9 +245,6 @@ export class WordPressAdapter implements PlatformAdapter {
         const tagIds = await this.ensureTagsExist(content.tags);
         postData.tags = tagIds;
       }
-      if (content.featuredImageId) {
-        postData.featured_media = content.featuredImageId;
-      }
       if (content.scheduledAt) {
         postData.date = new Date(content.scheduledAt).toISOString();
         postData.status = 'future';
@@ -244,8 +263,7 @@ export class WordPressAdapter implements PlatformAdapter {
       return {
         postId: String(response.data.id),
         url: response.data.link,
-        platform: 'wordpress',
-        publishedAt: response.data.date_gmt,
+        publishedAt: new Date(response.data.date_gmt),
       };
     } catch (error) {
       logger.error({ postId, error: String(error) }, 'Update post failed');
@@ -253,7 +271,7 @@ export class WordPressAdapter implements PlatformAdapter {
     }
   }
 
-  async getCategories(blogName?: string): Promise<PlatformCategory[]> {
+  async getCategories(_blogName?: string): Promise<PlatformCategory[]> {
     await this.ensureInitialized();
 
     try {
@@ -293,11 +311,14 @@ export class WordPressAdapter implements PlatformAdapter {
     }
   }
 
-  async uploadImage(imagePath: string, options?: { filename?: string; alt?: string; caption?: string }): Promise<PlatformImage> {
+  async uploadImage(
+    imagePath: string,
+    options?: { filename?: string; alt?: string; caption?: string },
+  ): Promise<PlatformImage> {
     await this.ensureInitialized();
 
     if (!fs.existsSync(imagePath)) {
-      throw new ValidationError(`Image file not found: ${imagePath}`, 'wordpress');
+      throw new ValidationError(`Image file not found: ${imagePath}`, 'wordpress', undefined, []);
     }
 
     try {
@@ -316,17 +337,16 @@ export class WordPressAdapter implements PlatformAdapter {
         timeout: 120000,
       });
 
-      const stats = fs.statSync(imagePath);
-
-      logger.info({ mediaId: response.data.id, url: response.data.source_url }, 'Image uploaded successfully');
+      logger.info(
+        { mediaId: response.data.id, url: response.data.source_url },
+        'Image uploaded successfully',
+      );
 
       return {
-        url: response.data.source_url,
         localPath: imagePath,
-        filename: path.basename(imagePath),
-        size: stats.size,
-        mimeType: response.data.mime_type,
-        id: String(response.data.id),
+        url: response.data.source_url,
+        altText: options?.alt || '',
+        caption: options?.caption,
       };
     } catch (error) {
       logger.error({ imagePath, error: String(error) }, 'Upload image failed');
@@ -334,7 +354,10 @@ export class WordPressAdapter implements PlatformAdapter {
     }
   }
 
-  async uploadMedia(filePath: string, options?: { filename?: string; alt?: string; caption?: string }): Promise<PlatformImage> {
+  async uploadMedia(
+    filePath: string,
+    options?: { filename?: string; alt?: string; caption?: string },
+  ): Promise<PlatformImage> {
     return this.uploadImage(filePath, options);
   }
 
@@ -372,7 +395,11 @@ export class WordPressAdapter implements PlatformAdapter {
   }
 
   private handleError(error: unknown, operation: string): Error {
-    if (error instanceof PlatformError || error instanceof AuthenticationError || error instanceof ValidationError) {
+    if (
+      error instanceof PlatformError ||
+      error instanceof AuthenticationError ||
+      error instanceof ValidationError
+    ) {
       throw error;
     }
 
@@ -385,7 +412,7 @@ export class WordPressAdapter implements PlatformAdapter {
           502,
           true,
           { operation, originalError: error.message },
-          error
+          error,
         );
       }
     }
@@ -397,7 +424,7 @@ export class WordPressAdapter implements PlatformAdapter {
       502,
       false,
       { operation, originalError: String(error) },
-      error instanceof Error ? error : undefined
+      error instanceof Error ? error : undefined,
     );
   }
 }

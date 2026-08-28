@@ -34,3 +34,6 @@ coverage/
 # Playwright
 test-results/
 playwright-report/
+
+# Husky runtime
+.husky/_/

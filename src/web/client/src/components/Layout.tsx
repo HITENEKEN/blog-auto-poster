@@ -15,7 +15,6 @@ import {
   Menu,
   X,
   Wifi,
-  WifiOff,
   Bell,
 } from 'lucide-react';
 import { clsx } from 'clsx';
@@ -35,7 +34,6 @@ export default function Layout() {
   const { user, logout } = useAuth();
   const { isConnected } = useWebSocket();
   const location = useLocation();
-  const [sidebarOpen, setSidebarOpen] = useState(false);
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
 
   return (
@@ -52,7 +50,7 @@ export default function Layout() {
       <aside
         className={clsx(
           'fixed inset-y-0 left-0 z-50 w-64 bg-card border-r border-border transition-transform duration-200 lg:translate-x-0',
-          mobileMenuOpen ? 'translate-x-0' : '-translate-x-full'
+          mobileMenuOpen ? 'translate-x-0' : '-translate-x-full',
         )}
       >
         <div className="flex h-full flex-col">
@@ -73,7 +71,8 @@ export default function Layout() {
           {/* Navigation */}
           <nav className="flex-1 overflow-y-auto p-4 space-y-1">
             {navigation.map((item) => {
-              const isActive = location.pathname === item.href ||
+              const isActive =
+                location.pathname === item.href ||
                 (item.href !== '/' && location.pathname.startsWith(item.href));
               return (
                 <NavLink
@@ -83,7 +82,7 @@ export default function Layout() {
                     'flex items-center gap-3 px-3 py-2 rounded-lg text-sm font-medium transition-colors',
                     isActive
                       ? 'bg-primary text-primary-foreground'
-                      : 'text-muted-foreground hover:bg-accent hover:text-foreground'
+                      : 'text-muted-foreground hover:bg-accent hover:text-foreground',
                   )}
                 >
                   <item.icon className="h-5 w-5" />
@@ -96,7 +95,12 @@ export default function Layout() {
           {/* Connection status & user */}
           <div className="p-4 border-t border-border space-y-4">
             <div className="flex items-center gap-2 text-xs text-muted-foreground">
-              <span className={clsx('h-2 w-2 rounded-full', isConnected ? 'bg-green-500' : 'bg-red-500')} />
+              <span
+                className={clsx(
+                  'h-2 w-2 rounded-full',
+                  isConnected ? 'bg-green-500' : 'bg-red-500',
+                )}
+              />
               <span>{isConnected ? '실시간 연결됨' : '연결 끊김'}</span>
             </div>
 
@@ -133,7 +137,12 @@ export default function Layout() {
           <div className="flex items-center gap-4">
             {/* Connection indicator */}
             <div className="hidden sm:flex items-center gap-1.5 text-xs text-muted-foreground">
-              <span className={clsx('h-1.5 w-1.5 rounded-full', isConnected ? 'bg-green-500' : 'bg-red-500')} />
+              <span
+                className={clsx(
+                  'h-1.5 w-1.5 rounded-full',
+                  isConnected ? 'bg-green-500' : 'bg-red-500',
+                )}
+              />
               <span>{isConnected ? 'Live' : 'Offline'}</span>
             </div>
 

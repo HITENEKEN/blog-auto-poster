@@ -3,6 +3,7 @@
 ## SQLite 테이블
 
 ### 1. jobs (작업 큐)
+
 ```sql
 CREATE TABLE jobs (
   id TEXT PRIMARY KEY,                              -- job-{timestamp}-{random}
@@ -23,6 +24,7 @@ CREATE TABLE jobs (
 ```
 
 ### 2. job_logs (작업 로그)
+
 ```sql
 CREATE TABLE job_logs (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -36,6 +38,7 @@ CREATE TABLE job_logs (
 ```
 
 ### 3. published_posts (발행 기록)
+
 ```sql
 CREATE TABLE published_posts (
   id TEXT PRIMARY KEY,                              -- pub-{platform}-{postId}
@@ -56,6 +59,7 @@ CREATE TABLE published_posts (
 ```
 
 ## 인덱스
+
 ```sql
 -- jobs 테이블
 CREATE INDEX idx_jobs_status ON jobs(status);
@@ -72,6 +76,7 @@ CREATE INDEX idx_published_posts_published_at ON published_posts(published_at);
 ```
 
 ## PRAGMA 설정
+
 ```sql
 PRAGMA journal_mode = WAL;        -- Write-Ahead Logging (동시 읽기/쓰기 성능)
 PRAGMA busy_timeout = 5000;       -- 5초 락 대기
@@ -80,6 +85,7 @@ PRAGMA busy_timeout = 5000;       -- 5초 락 대기
 ## Job 타입별 Payload 예시
 
 ### RESEARCH
+
 ```json
 {
   "seedKeywords": ["무선청소기", "로봇청소기"],
@@ -89,6 +95,7 @@ PRAGMA busy_timeout = 5000;       -- 5초 락 대기
 ```
 
 ### GENERATE
+
 ```json
 {
   "template": "coupang-product-review",
@@ -99,6 +106,7 @@ PRAGMA busy_timeout = 5000;       -- 5초 락 대기
 ```
 
 ### PUBLISH
+
 ```json
 {
   "platforms": ["tistory"],
@@ -107,6 +115,7 @@ PRAGMA busy_timeout = 5000;       -- 5초 락 대기
 ```
 
 ### SYNC_ANALYTICS
+
 ```json
 {
   "platforms": ["tistory", "wordpress"],
@@ -115,6 +124,7 @@ PRAGMA busy_timeout = 5000;       -- 5초 락 대기
 ```
 
 ## Job 상태 전이
+
 ```
 PENDING → QUEUED → RUNNING → COMPLETED
                 ↓
@@ -124,27 +134,32 @@ PENDING → QUEUED → RUNNING → COMPLETED
 ```
 
 ## 재시도 정책
+
 - **기본 재시도**: 3회 (`defaultRetryAttempts: 3`)
 - **지수 백오프**: `delay = baseDelay * 2^(attempt-1)` (기본 5초)
 - **데드레터**: 5회 실패 시 (`deadLetterAfterAttempts: 5`)
 
 ## 동시성 제어
+
 - **전역 최대 동시 작업**: 3개 (`maxConcurrentJobs: 3`)
 - **플랫폼별/제휴별**: `scheduler.concurrency.perPlatform`, `perAffiliate`로 세부 제어
 
 ## 데이터 보존 정책
-| 데이터 | 보존 기간 | 비고 |
-|--------|-----------|------|
-| jobs (COMPLETED/FAILED) | 90일 | `cleanup(olderThanDays: 90)`로 주기적 정리 |
-| job_logs | 90일 | 작업 삭제 시 CASCADE 삭제 |
-| published_posts | 영구 | 수익 분석용 |
+
+| 데이터                  | 보존 기간 | 비고                                       |
+| ----------------------- | --------- | ------------------------------------------ |
+| jobs (COMPLETED/FAILED) | 90일      | `cleanup(olderThanDays: 90)`로 주기적 정리 |
+| job_logs                | 90일      | 작업 삭제 시 CASCADE 삭제                  |
+| published_posts         | 영구      | 수익 분석용                                |
 
 ## 마이그레이션 전략
+
 - **스키마 버전**: `PRAGMA user_version`으로 관리
 - **변경 시**: `ALTER TABLE` 또는 새 테이블 생성 + 데이터 복사
 - **Phase 3**: 일일 10k+ 잡 시 PostgreSQL 마이그레이션 예정 (`QueueBackend` 인터페이스로 추상화)
 
 ## 백업/복원
+
 ```bash
 # 백업
 sqlite3 data/jobs.sqlite ".backup data/backups/jobs-$(date +%Y%m%d).sqlite"

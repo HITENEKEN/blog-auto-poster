@@ -7,21 +7,21 @@
 
 ## 📚 문서
 
-| 문서 | 설명 |
-|------|------|
-| [`documents/NEXT_STEPS.md`](documents/NEXT_STEPS.md) | **⚡ 즉시 실행: 쿠팡 승인 후 5분 만에 자동화 시작** |
-| [`documents/01-overview.md`](documents/01-overview.md) | 시스템 개요, 구현 상태, 핵심 특징, 지원 플랫폼, 자동화 파이프라인 |
-| [`documents/02-architecture.md`](documents/02-architecture.md) | 디렉토리 구조, 모듈 의존성, 데이터 플로우, 핵심 인터페이스, 레지스트리 패턴 |
-| [`documents/03-api.md`](documents/03-api.md) | REST API 엔드포인트, 인증, DTO, 요청/응답 예시, WebSocket, 에러 응답 |
-| [`documents/04-tech-stack.md`](documents/04-tech-stack.md) | 백엔드/프론트엔드/외부 API/개발 도구 기술 스택, 버전, 설정 |
-| [`documents/05-database.md`](documents/05-database.md) | SQLite 스키마 (jobs/job_logs/published_posts), 인덱스, Job 상태 전이, 재시도 정책 |
-| [`documents/06-deployment.md`](documents/06-deployment.md) | 사전 요구사항, 설치/설정/빌드/실행, PM2 운영, 헬스체크, 로그, 백업 |
-| [`documents/07-roadmap.md`](documents/07-roadmap.md) | Phase 1~4 단계별 마일스톤, 우선순위 기준, 리스크 대응, 즉시 실행 체크리스트 |
-| [`documents/08-extension-guide.md`](documents/08-extension-guide.md) | 확장: 어댑터/템플릿/잡/CLI/웹페이지 추가 가이드 |
-| [`documents/09-troubleshooting.md`](documents/09-troubleshooting.md) | 인증/API/스케줄러/콘텐츠/웹/DB 문제 해결, 디버깅 팁, 긴급 대응 |
-| [`documents/10-naver-blog-bootstrap.md`](documents/10-naver-blog-bootstrap.md) | 네이버 블로그 부트스트랩: 수동 글 작성 → 쿠팡 승인 → 자동화 연동 가이드 |
-| [`documents/11-naver-api-hub-plan.md`](documents/11-naver-api-hub-plan.md) | 네이버 API Hub 연동 구현 계획 (키워드 검색 + 블로그 검색) |
-| [`documents/12-dashboard-keywords-template-plan.md`](documents/12-dashboard-keywords-template-plan.md) | **대시보드 확장: 인기 키워드 화면 + 쿠팡 파트너스 템플릿 구현 계획** |
+| 문서                                                                                                   | 설명                                                                              |
+| ------------------------------------------------------------------------------------------------------ | --------------------------------------------------------------------------------- |
+| [`documents/NEXT_STEPS.md`](documents/NEXT_STEPS.md)                                                   | **⚡ 즉시 실행: 쿠팡 승인 후 5분 만에 자동화 시작**                               |
+| [`documents/01-overview.md`](documents/01-overview.md)                                                 | 시스템 개요, 구현 상태, 핵심 특징, 지원 플랫폼, 자동화 파이프라인                 |
+| [`documents/02-architecture.md`](documents/02-architecture.md)                                         | 디렉토리 구조, 모듈 의존성, 데이터 플로우, 핵심 인터페이스, 레지스트리 패턴       |
+| [`documents/03-api.md`](documents/03-api.md)                                                           | REST API 엔드포인트, 인증, DTO, 요청/응답 예시, WebSocket, 에러 응답              |
+| [`documents/04-tech-stack.md`](documents/04-tech-stack.md)                                             | 백엔드/프론트엔드/외부 API/개발 도구 기술 스택, 버전, 설정                        |
+| [`documents/05-database.md`](documents/05-database.md)                                                 | SQLite 스키마 (jobs/job_logs/published_posts), 인덱스, Job 상태 전이, 재시도 정책 |
+| [`documents/06-deployment.md`](documents/06-deployment.md)                                             | 사전 요구사항, 설치/설정/빌드/실행, PM2 운영, 헬스체크, 로그, 백업                |
+| [`documents/07-roadmap.md`](documents/07-roadmap.md)                                                   | Phase 1~4 단계별 마일스톤, 우선순위 기준, 리스크 대응, 즉시 실행 체크리스트       |
+| [`documents/08-extension-guide.md`](documents/08-extension-guide.md)                                   | 확장: 어댑터/템플릿/잡/CLI/웹페이지 추가 가이드                                   |
+| [`documents/09-troubleshooting.md`](documents/09-troubleshooting.md)                                   | 인증/API/스케줄러/콘텐츠/웹/DB 문제 해결, 디버깅 팁, 긴급 대응                    |
+| [`documents/10-naver-blog-bootstrap.md`](documents/10-naver-blog-bootstrap.md)                         | 네이버 블로그 부트스트랩: 수동 글 작성 → 쿠팡 승인 → 자동화 연동 가이드           |
+| [`documents/11-naver-api-hub-plan.md`](documents/11-naver-api-hub-plan.md)                             | 네이버 API Hub 연동 구현 계획 (키워드 검색 + 블로그 검색)                         |
+| [`documents/12-dashboard-keywords-template-plan.md`](documents/12-dashboard-keywords-template-plan.md) | **대시보드 확장: 인기 키워드 화면 + 쿠팡 파트너스 템플릿 구현 계획**              |
 
 ---
 
@@ -66,19 +66,21 @@ src/
 ```
 
 ### 핵심 특징
+
 - **모듈식 어댑터 패턴**: 제휴/플랫폼/이미지 프로바이더 교체 가능
 - **TypeScript 엄격 모드**: 모든 계약 인터페이스로 타입 안전성 보장
 - **영속적 작업 큐**: SQLite 기반, 프로세스 재시작 후 스케줄 유지
 - **실시간 웹 대시보드**: WebSocket 기반 로그/진행률/알림
 
 ### 현재 구현 상태
-| 모듈 | 상태 |
-|------|------|
-| Core / 쿠팡 어댑터 / 플랫폼 어댑터 | ✅ 완료 |
+
+| 모듈                                    | 상태    |
+| --------------------------------------- | ------- |
+| Core / 쿠팡 어댑터 / 플랫폼 어댑터      | ✅ 완료 |
 | 템플릿 엔진 / 이미지 생성 / 포스트 조립 | ✅ 완료 |
-| 키워드 리서치 / 경쟁 분석 / 주제 선정 | ✅ 완료 |
-| 작업 큐 + 스케줄러 / CLI / 웹 대시보드 | ✅ 완료 |
-| TypeScript 컴파일 | ✅ 성공 |
+| 키워드 리서치 / 경쟁 분석 / 주제 선정   | ✅ 완료 |
+| 작업 큐 + 스케줄러 / CLI / 웹 대시보드  | ✅ 완료 |
+| TypeScript 컴파일                       | ✅ 성공 |
 
 ---
 
@@ -106,14 +108,15 @@ pm2 start dist/web/server/index.js --name "blog-poster-web"
 
 ## 🔧 설정 파일
 
-| 파일 | 용도 |
-|------|------|
-| `config/default.yaml` | 기본 설정 (git 관리) |
-| `config/local.yaml` | 로컬 오버라이드 (gitignored) |
+| 파일                  | 용도                         |
+| --------------------- | ---------------------------- |
+| `config/default.yaml` | 기본 설정 (git 관리)         |
+| `config/local.yaml`   | 로컬 오버라이드 (gitignored) |
 | `config/secrets.yaml` | API 키/비밀번호 (gitignored) |
-| `config/test.yaml` | 테스트용 설정 |
+| `config/test.yaml`    | 테스트용 설정                |
 
 ### 필수 환경변수 (또는 secrets.yaml)
+
 ```bash
 BLOG_POSTER_AFFILIATES_COUPANG_API_KEY=xxx
 BLOG_POSTER_AFFILIATES_COUPANG_API_SECRET=xxx
@@ -127,13 +130,13 @@ BLOG_POSTER_WEB_JWT_SECRET=your-secret-key
 
 ## 📦 기술 스택
 
-| 영역 | 기술 |
-|------|------|
-| **Runtime** | Node.js ≥ 20, TypeScript 5.5 (엄격 모드) |
-| **Backend** | Fastify, better-sqlite3, node-cron, Axios, Pino |
-| **Frontend** | React 18, Vite, Tailwind CSS, Recharts |
-| **API** | Coupang Open API, Tistory API, WordPress REST, YouTube Data API v3 |
-| **AI** | OpenAI DALL-E 3, Stability AI, Google Gemini |
+| 영역         | 기술                                                               |
+| ------------ | ------------------------------------------------------------------ |
+| **Runtime**  | Node.js ≥ 20, TypeScript 5.5 (엄격 모드)                           |
+| **Backend**  | Fastify, better-sqlite3, node-cron, Axios, Pino                    |
+| **Frontend** | React 18, Vite, Tailwind CSS, Recharts                             |
+| **API**      | Coupang Open API, Tistory API, WordPress REST, YouTube Data API v3 |
+| **AI**       | OpenAI DALL-E 3, Stability AI, Google Gemini                       |
 
 ---
 
@@ -155,6 +158,7 @@ documents/
 ├── 11-naver-api-hub-plan.md   # 네이버 API Hub 연동 계획
 └── 12-dashboard-keywords-template-plan.md # 대시보드 확장 계획
 ```
+
 ---
 
 ## 📄 라이선스

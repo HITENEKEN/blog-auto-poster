@@ -30,7 +30,7 @@ export function ToastProvider({ children }: { children: ReactNode }) {
 
   const addToast = (t: Omit<Toast, 'id'>) => {
     const id = Math.random().toString(36).substring(7);
-    setToasts(prev => [...prev, { ...t, id }]);
+    setToasts((prev) => [...prev, { ...t, id }]);
     if (t.duration !== 0) {
       setTimeout(() => dismiss(id), t.duration || 5000);
     }
@@ -38,7 +38,7 @@ export function ToastProvider({ children }: { children: ReactNode }) {
   };
 
   const dismiss = (id: string) => {
-    setToasts(prev => prev.filter(t => t.id !== id));
+    setToasts((prev) => prev.filter((t) => t.id !== id));
   };
 
   // Register global toast function
@@ -72,7 +72,7 @@ function ToastItem({ toast, onDismiss }: { toast: Toast; onDismiss: (id: string)
     <div
       className={clsx(
         'pointer-events-auto flex items-center gap-3 rounded-lg border p-4 shadow-lg min-w-[300px] max-w-md',
-        variants[toast.variant || 'default']
+        variants[toast.variant || 'default'],
       )}
     >
       <div className="flex-1">

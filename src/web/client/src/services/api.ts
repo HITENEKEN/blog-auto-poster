@@ -1,6 +1,6 @@
 import axios, { AxiosInstance, InternalAxiosRequestConfig } from 'axios';
 
-const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:3000';
+const API_URL = import.meta.env.VITE_API_URL || '';
 
 const api: AxiosInstance = axios.create({
   baseURL: API_URL,
@@ -19,7 +19,7 @@ api.interceptors.request.use(
     }
     return config;
   },
-  (error) => Promise.reject(error)
+  (error) => Promise.reject(error),
 );
 
 // Response interceptor for error handling
@@ -29,9 +29,13 @@ api.interceptors.response.use(
     if (error.response?.status === 401) {
       // Token expired, try to refresh
       try {
-        await axios.post(`${API_URL}/api/auth/refresh`, {}, {
-          headers: { Authorization: `Bearer ${localStorage.getItem('token')}` },
-        });
+        await axios.post(
+          `${API_URL}/api/auth/refresh`,
+          {},
+          {
+            headers: { Authorization: `Bearer ${localStorage.getItem('token')}` },
+          },
+        );
         // Retry original request
         return api.request(error.config);
       } catch {
@@ -41,7 +45,7 @@ api.interceptors.response.use(
       }
     }
     return Promise.reject(error);
-  }
+  },
 );
 
 export { api };

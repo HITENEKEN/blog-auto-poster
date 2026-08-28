@@ -1,6 +1,6 @@
 ---
 name: "coupang-product-review"
-platforms: ["tistory", "wordpress"]
+platforms: ["tistory", "wordpress", "naver"]
 requiredFields:
   - "productName"
   - "price"
@@ -17,6 +17,13 @@ optionalFields:
   - "categoryName"
   - "description"
   - "specs"
+  - "topPosts"
+  - "experienceIntro"
+  - "realUsageStory"
+  - "whyIChoseIt"
+  - "conclusion"
+  - "usageTips"
+  - "buyingChecklist"
 seo:
   titleTemplate: "{{productName}} 리뷰 - 장단점 총정리 (2024)"
   descriptionTemplate: "{{productName}} 구매 전 꼭 확인하세요. 가격 {{price}}원, {{#if originalPrice}}정가 {{originalPrice}}원 ({{discountRate}}% 할인){{/if}}. 장점: {{#each pros}}{{this}}{{#unless @last}}, {{/unless}}{{/each}}. 단점: {{#each cons}}{{this}}{{#unless @last}}, {{/unless}}{{/each}}."
@@ -64,6 +71,13 @@ jsonLd:
     </div>
   </div>
 
+  <!-- First-person experience intro (LLM-generated; falls back to header copy) -->
+  {{#if experienceIntro}}
+  <section class="experience-intro">
+    <p>{{experienceIntro}}</p>
+  </section>
+  {{/if}}
+
   <!-- Quick Summary -->
   <section class="quick-summary">
     <h2>한눈에 보는 요약</h2>
@@ -87,15 +101,21 @@ jsonLd:
     </div>
   </section>
 
-  <!-- Detailed Review -->
+  <!-- Detailed Review (first-person) -->
   <section class="detailed-review">
-    <h2>상세 리뷰</h2>
-    
-    {{#if description}}
-    <div class="description">
-      <h3>제품 설명</h3>
-      <p>{{description}}</p>
+    <h2>제가 직접 써본 상세 후기</h2>
+
+    {{#if realUsageStory}}
+    <div class="real-usage">
+      <p>{{realUsageStory}}</p>
     </div>
+    {{else}}
+      {{#if description}}
+      <div class="description">
+        <h3>제품 설명</h3>
+        <p>{{description}}</p>
+      </div>
+      {{/if}}
     {{/if}}
 
     {{#if specs}}
@@ -131,7 +151,49 @@ jsonLd:
         {{/each}}
       </ul>
     </div>
+
+    {{#if whyIChoseIt}}
+    <div class="why-chose">
+      <h3>왜 이 제품을 골랐는지</h3>
+      <p>{{whyIChoseIt}}</p>
+    </div>
+    {{/if}}
   </section>
+
+  <!-- Benchmark section: top-ranking Naver blog posts (optional) -->
+  {{#if topPosts}}
+  <section class="benchmarks">
+    <h2>다른 분들은 이렇게 쓰셨더라고요</h2>
+    <ul>
+      {{#each topPosts}}
+      <li><a href="{{this.link}}" target="_blank" rel="noopener">{{this.title}}</a> — {{this.bloggername}}</li>
+      {{/each}}
+    </ul>
+    <p>상위 블로그들을 벤치마킹해 보니 공통적으로 강조하는 포인트는 실사용 편의성과 가성비였습니다. 저도 써보고 나서 그 말에 충분히 공감했습니다.</p>
+  </section>
+  {{/if}}
+
+  <!-- Practical usage tips + buying checklist (LLM-generated) -->
+  {{#if usageTips}}
+  <section class="tips-section">
+    <h2>실전 활용 팁</h2>
+    <ul>
+      {{#each usageTips}}
+      <li>{{this}}</li>
+      {{/each}}
+    </ul>
+  </section>
+  {{/if}}
+  {{#if buyingChecklist}}
+  <section class="checklist-section">
+    <h2>구매 전 체크리스트</h2>
+    <ul>
+      {{#each buyingChecklist}}
+      <li>{{this}}</li>
+      {{/each}}
+    </ul>
+  </section>
+  {{/if}}
 
   <!-- Purchase Guide -->
   <section class="purchase-guide">
@@ -140,6 +202,11 @@ jsonLd:
       {{productName}}은(는) {{#if discountRate}}현재 {{discountRate}}% 할인된 {{formatPrice price}}원에 구매 가능합니다.{{else}}{{formatPrice price}}원에 판매 중입니다.{{/if}}
       {{#if originalPrice}}정가 {{formatPrice originalPrice}}원에서 할인된 가격입니다.{{/if}}
     </p>
+    {{#if conclusion}}
+    <div class="conclusion">
+      <p>{{conclusion}}</p>
+    </div>
+    {{/if}}
     <div class="purchase-cta">
       <a href="{{affiliateUrl}}" target="_blank" rel="nofollow sponsored" class="purchase-button">
         🛒 쿠팡에서 최저가 확인하기
@@ -205,6 +272,15 @@ jsonLd:
   transition: background 0.2s;
 }
 .cta-button:hover { background: #c62828; }
+.experience-intro {
+  margin: 24px 0;
+  padding: 18px 20px;
+  background: #f3f8ff;
+  border-left: 4px solid #1e88e5;
+  border-radius: 6px;
+  font-size: 1.02rem;
+  color: #1a3a5c;
+}
 .quick-summary { margin: 32px 0; padding: 20px; background: #fafafa; border-radius: 8px; }
 .summary-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 24px; }
 .summary-item h3 { font-size: 1.1rem; margin: 0 0 12px; }
@@ -215,12 +291,33 @@ jsonLd:
 .detailed-review { margin: 32px 0; }
 .detailed-review h2 { font-size: 1.5rem; margin-bottom: 16px; padding-bottom: 8px; border-bottom: 2px solid #e53935; }
 .detailed-review h3 { font-size: 1.2rem; color: #333; margin-top: 24px; }
+.real-usage { margin: 16px 0; padding: 16px; background: #fffef5; border: 1px solid #fff3c4; border-radius: 8px; }
+.real-usage p { margin: 0; white-space: pre-line; }
 .description p { color: #555; }
 .specs table { width: 100%; border-collapse: collapse; margin: 12px 0; }
 .specs th, .specs td { padding: 10px 12px; border: 1px solid #ddd; text-align: left; }
 .specs th { background: #f5f5f5; font-weight: 600; }
+.why-chose { margin-top: 20px; padding: 14px 16px; background: #f1f8e9; border-radius: 8px; }
+.why-chose p { margin: 0; white-space: pre-line; }
+.benchmarks { margin: 32px 0; padding: 20px; background: #f7f7fb; border: 1px solid #e0e0ef; border-radius: 8px; }
+.benchmarks h2 { font-size: 1.3rem; margin: 0 0 12px; color: #4527a0; }
+.benchmarks ul { margin: 0 0 12px; padding-left: 20px; }
+.benchmarks li { margin: 6px 0; }
+.benchmarks a { color: #4527a0; text-decoration: none; }
+.benchmarks a:hover { text-decoration: underline; }
 .purchase-guide { margin: 32px 0; padding: 24px; background: #fff8f8; border-radius: 8px; border: 1px solid #ffebee; }
 .purchase-guide h2 { font-size: 1.4rem; margin: 0 0 16px; color: #c62828; }
+.conclusion { margin: 14px 0; padding: 14px 16px; background: #e8f5e9; border-radius: 8px; }
+.tips-section { margin: 32px 0; padding: 20px; background: #fffde7; border-radius: 8px; }
+.tips-section h2 { font-size: 1.3rem; margin: 0 0 12px; color: #f57f17; }
+.tips-section ul { margin: 0; padding-left: 20px; }
+.tips-section li { margin: 8px 0; }
+.checklist-section { margin: 32px 0; padding: 20px; background: #e8f5e9; border-radius: 8px; }
+.checklist-section h2 { font-size: 1.3rem; margin: 0 0 12px; color: #2e7d32; }
+.checklist-section ul { margin: 0; padding-left: 20px; list-style: none; }
+.checklist-section li { margin: 8px 0; }
+.checklist-section li::before { content: "☐ "; }
+.conclusion p { margin: 0; white-space: pre-line; }
 .purchase-button {
   display: inline-block;
   background: #2e7d32;

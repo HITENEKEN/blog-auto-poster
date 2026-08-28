@@ -1,0 +1,188 @@
+---
+name: "naver-coupang-review"
+platforms: ["naver"]
+requiredFields:
+  - "productName"
+  - "price"
+  - "affiliateUrl"
+  - "experienceIntro"
+  - "realUsageStory"
+  - "conclusion"
+optionalFields:
+  - "categoryName"
+  - "brand"
+  - "originalPrice"
+  - "discountRate"
+  - "rating"
+  - "reviewCount"
+  - "imageUrl"
+  - "pros"
+  - "cons"
+  - "targetAudience"
+  - "specs"
+  - "faqList"
+  - "whyIChoseIt"
+  - "usageTips"
+  - "buyingChecklist"
+seo:
+  titleTemplate: "{{productName}} 직접 써본 솔직 후기 - 장단점과 사용기"
+  descriptionTemplate: "{{productName}}을(를) 직접 사용해 본 1인칭 체험 후기입니다. 사용 환경, 소요 시간, 장단점과 구매 전 체크리스트까지 정리했습니다."
+  keywords: ["{{productName}} 후기", "{{productName}} 리뷰", "{{productName}} 사용기", "{{productName}} 추천"]
+jsonLd:
+  type: "Product"
+  includeReview: true
+---
+
+<div class="ncr-wrap">
+
+  <!-- 광고 표기: 네이버 광고 지침상 제목 또는 본문 최상단 표기 의무.
+       정확한 대가성 문구 (쿠팡 심사기준) — 불확정 표현 금지, 하단 별도 고지 없음. -->
+  <div class="ncr-disclosure" role="note">
+    <strong>광고</strong> · 이 포스팅은 쿠팡 파트너스 활동의 일환으로, 이에 따른 일정액의 수수료를 제공받습니다.
+  </div>
+
+  <!-- 헤더 -->
+  <div class="ncr-header">
+    <h1>{{productName}} 직접 써본 솔직 후기</h1>
+    <p class="ncr-meta">
+      {{#if categoryName}}<span>📂 {{categoryName}}</span>{{/if}}
+      {{#if brand}}<span>🏷️ {{brand}}</span>{{/if}}
+      {{#if rating}}<span>⭐ {{renderStars rating}} ({{reviewCount}}개 리뷰)</span>{{/if}}
+    </p>
+  </div>
+
+  {{#if imageUrl}}
+  <img src="{{imageUrl}}" alt="{{productName}}" class="ncr-img" loading="lazy" />
+  {{/if}}
+
+  <!-- 도입부: 왜 조사했고 사용하게 되었는지 (1인칭) -->
+  <div class="ncr-experience">{{experienceIntro}}</div>
+
+  <!-- 상세 체험기 (정보성 중심 — 단순 상품 나열 금지) -->
+  <div class="ncr-section">
+    <h2>제가 직접 사용해 본 이야기</h2>
+    <p style="white-space:pre-line">{{realUsageStory}}</p>
+  </div>
+
+  <!-- 장단점 요약 표 -->
+  {{#if pros}}
+  <table class="ncr-pctable">
+    <tr><th>✅ 좋았던 점</th><th>❌ 아쉬웠던 점</th></tr>
+    <tr>
+      <td><ul>{{#each pros}}<li>{{this}}</li>{{/each}}</ul></td>
+      <td><ul>{{#each cons}}<li>{{this}}</li>{{/each}}</ul></td>
+    </tr>
+  </table>
+  {{/if}}
+
+  <!-- 스펙 -->
+  {{#if specs}}
+  <div class="ncr-section">
+    <h2>주요 스펙</h2>
+    <table class="ncr-specs">
+      {{#each specs}}
+      <tr><th>{{@key}}</th><td>{{this}}</td></tr>
+      {{/each}}
+    </table>
+  </div>
+  {{/if}}
+
+  <!-- 제휴 링크: 본문 중단 단 1개 CTA (링크 반복 과다 지양) -->
+  <div class="ncr-price-card">
+    <span class="ncr-price">{{formatPrice price}}원</span>
+    {{#if originalPrice}}<span class="ncr-original">{{formatPrice originalPrice}}원</span>{{/if}}
+    {{#if discountRate}}<span class="ncr-discount">{{discountRate}}% 할인</span>{{/if}}
+    <a href="{{affiliateUrl}}" target="_blank" rel="nofollow sponsored" class="ncr-cta">🛒 {{productName}} 가격 확인하기</a>
+  </div>
+
+  <!-- 선택 이유 -->
+  {{#if whyIChoseIt}}
+  <div class="ncr-section">
+    <h2>왜 이 제품을 선택했나</h2>
+    <p style="white-space:pre-line">{{whyIChoseIt}}</p>
+  </div>
+  {{/if}}
+
+  <!-- 실전 활용 팁 -->
+  {{#if usageTips}}
+  <div class="ncr-section">
+    <h2>실전 활용 팁</h2>
+    <ul class="ncr-tips">
+      {{#each usageTips}}<li>{{this}}</li>{{/each}}
+    </ul>
+  </div>
+  {{/if}}
+
+  <!-- 구매 전 체크리스트 -->
+  {{#if buyingChecklist}}
+  <div class="ncr-section">
+    <h2>구매 전 체크리스트</h2>
+    <ul class="ncr-checklist">
+      {{#each buyingChecklist}}<li>{{this}}</li>{{/each}}
+    </ul>
+  </div>
+  {{/if}}
+
+  <!-- FAQ -->
+  {{#if faqList}}
+  <div class="ncr-section">
+    <h2>자주 묻는 질문</h2>
+    {{#each faqList}}
+    <p class="ncr-faq-q">Q. {{this.question}}</p>
+    <p class="ncr-faq-a">A. {{this.answer}}</p>
+    {{/each}}
+  </div>
+  {{/if}}
+
+  <!-- 추천 대상 -->
+  {{#if targetAudience}}
+  <div class="ncr-section">
+    <h2>이런 분께 추천합니다</h2>
+    <ul class="ncr-audience">
+      {{#each targetAudience}}<li>{{this}}</li>{{/each}}
+    </ul>
+  </div>
+  {{/if}}
+
+  <!-- 솔직한 결론 -->
+  <div class="ncr-section ncr-conclusion">
+    <h2>총평</h2>
+    <p style="white-space:pre-line">{{conclusion}}</p>
+  </div>
+
+</div>
+
+<style>
+.ncr-wrap{max-width:760px;margin:0 auto;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI','Noto Sans KR',sans-serif;line-height:1.8;color:#333;padding:16px}
+.ncr-disclosure{background:#fff3bf;border:1px solid #ffd43b;border-radius:8px;padding:12px 16px;font-size:14px;color:#5c4400;margin-bottom:20px}
+.ncr-header h1{font-size:1.5rem;line-height:1.4;margin:0 0 8px;color:#212529}
+.ncr-meta{color:#868e96;font-size:.85rem;margin:0 0 16px}
+.ncr-meta span{margin-right:10px}
+.ncr-img{max-width:100%;border-radius:8px;margin:0 0 16px}
+.ncr-experience{background:#f1f3f5;border-radius:8px;padding:14px 16px;font-size:15px;color:#343a40;margin-bottom:20px}
+.ncr-section{margin:0 0 24px}
+.ncr-section h2{font-size:1.15rem;margin:0 0 10px;color:#212529;border-left:4px solid #343a40;padding-left:10px}
+.ncr-pctable{width:100%;border-collapse:collapse;margin:0 0 24px}
+.ncr-pctable th{background:#f8f9fa;padding:10px;border:1px solid #dee2e6;font-size:.95rem}
+.ncr-pctable td{padding:10px 12px;border:1px solid #dee2e6;font-size:.9rem;vertical-align:top}
+.ncr-pctable ul{margin:0;padding-left:18px}
+.ncr-specs{width:100%;border-collapse:collapse;margin:0 0 24px}
+.ncr-specs th{background:#f8f9fa;width:30%;padding:8px 12px;border:1px solid #dee2e6;font-size:.9rem;text-align:left}
+.ncr-specs td{padding:8px 12px;border:1px solid #dee2e6;font-size:.9rem}
+.ncr-price-card{background:#f8f9fa;border:1px solid #dee2e6;border-radius:8px;padding:16px;text-align:center;margin:0 0 24px}
+.ncr-price{font-size:1.3rem;font-weight:700;color:#212529;margin-right:8px}
+.ncr-original{color:#adb5bd;text-decoration:line-through;margin-right:8px}
+.ncr-discount{color:#e03131;font-weight:600;margin-right:8px}
+.ncr-cta{display:inline-block;background:#343a40;color:#fff;padding:12px 24px;border-radius:6px;text-decoration:none;font-weight:600;margin:12px 0 0}
+.ncr-cta:hover{background:#212529}
+.ncr-tips{background:#fffde7;border-radius:8px;padding:14px 16px}
+.ncr-tips li{margin-bottom:8px;font-size:.95rem}
+.ncr-checklist{background:#e8f5e9;border-radius:8px;padding:14px 16px;list-style:none}
+.ncr-checklist li{margin-bottom:8px;font-size:.95rem}
+.ncr-checklist li::before{content:"☐ "}
+.ncr-faq-q{font-weight:600;color:#212529;margin-bottom:6px}
+.ncr-faq-a{color:#495057;font-size:.95rem;margin-bottom:14px}
+.ncr-audience li{margin-bottom:8px;font-size:.95rem}
+.ncr-conclusion{background:#f1f8e9;border-radius:8px;padding:14px 16px}
+@media(max-width:600px){.ncr-header h1{font-size:1.25rem}}
+</style>

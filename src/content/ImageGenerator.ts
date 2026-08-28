@@ -21,7 +21,13 @@ export class DalleProvider implements ImageProvider {
   private defaultQuality: string;
   private defaultSize: string;
 
-  constructor(config: { apiKey: string; model?: string; defaultStyle?: string; defaultQuality?: string; defaultSize?: string }) {
+  constructor(config: {
+    apiKey: string;
+    model?: string;
+    defaultStyle?: string;
+    defaultQuality?: string;
+    defaultSize?: string;
+  }) {
     this.apiKey = config.apiKey;
     this.model = config.model || 'dall-e-3';
     this.defaultStyle = config.defaultStyle || 'vivid';
@@ -36,7 +42,10 @@ export class DalleProvider implements ImageProvider {
     return this.generatePlaceholder(prompt, options);
   }
 
-  private async generatePlaceholder(prompt: string, options: ImageGenerationOptions): Promise<ImageGenerationResult> {
+  private async generatePlaceholder(
+    prompt: string,
+    options: ImageGenerationOptions,
+  ): Promise<ImageGenerationResult> {
     const count = options.count || 1;
     const urls: string[] = [];
     const localPaths: string[] = [];
@@ -72,7 +81,10 @@ export class StableDiffusionProvider implements ImageProvider {
     return this.generatePlaceholder(prompt, options);
   }
 
-  private async generatePlaceholder(prompt: string, options: ImageGenerationOptions): Promise<ImageGenerationResult> {
+  private async generatePlaceholder(
+    prompt: string,
+    options: ImageGenerationOptions,
+  ): Promise<ImageGenerationResult> {
     const count = options.count || 1;
     const urls: string[] = [];
     const localPaths: string[] = [];
@@ -106,7 +118,10 @@ export class GeminiProvider implements ImageProvider {
     return this.generatePlaceholder(prompt, options);
   }
 
-  private async generatePlaceholder(prompt: string, options: ImageGenerationOptions): Promise<ImageGenerationResult> {
+  private async generatePlaceholder(
+    prompt: string,
+    options: ImageGenerationOptions,
+  ): Promise<ImageGenerationResult> {
     const count = options.count || 1;
     const urls: string[] = [];
     const localPaths: string[] = [];
@@ -172,17 +187,27 @@ export class ImageGeneratorImpl implements ImageGenerator {
 
   setDefaultProvider(name: string): void {
     if (!this.providers.has(name)) {
-      throw new ConfigurationError(`Image provider not registered: ${name}`, 'image.defaultProvider');
+      throw new ConfigurationError(
+        `Image provider not registered: ${name}`,
+        'image.defaultProvider',
+      );
     }
     this.defaultProvider = name;
   }
 
-  async generate(prompt: string, options: ImageGenerationOptions = {}): Promise<ImageGenerationResult> {
+  async generate(
+    prompt: string,
+    options: ImageGenerationOptions = {},
+  ): Promise<ImageGenerationResult> {
     const providerName = options.style ? this.defaultProvider : this.defaultProvider;
     const provider = this.providers.get(providerName);
 
     if (!provider) {
-      throw new TemplateError(`Image provider not found: ${providerName}`, 'PROVIDER_NOT_FOUND', providerName);
+      throw new TemplateError(
+        `Image provider not found: ${providerName}`,
+        'PROVIDER_NOT_FOUND',
+        providerName,
+      );
     }
 
     logger.info({ provider: providerName, prompt: prompt.substring(0, 100) }, 'Generating image');
@@ -205,7 +230,7 @@ export class ImageGeneratorImpl implements ImageGenerator {
         400,
         false,
         { originalError: String(error) },
-        error instanceof Error ? error : undefined
+        error instanceof Error ? error : undefined,
       );
     }
   }
@@ -252,6 +277,9 @@ export class ImageGeneratorImpl implements ImageGenerator {
   }
 }
 
-export function createImageGenerator(defaultProvider?: string, outputDir?: string): ImageGeneratorImpl {
+export function createImageGenerator(
+  defaultProvider?: string,
+  outputDir?: string,
+): ImageGeneratorImpl {
   return new ImageGeneratorImpl(defaultProvider, outputDir);
 }

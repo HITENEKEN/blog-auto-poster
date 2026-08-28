@@ -1,7 +1,14 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import * as yaml from 'js-yaml';
-import { ConfigManager, AppConfig, AffiliateConfig, PlatformCredentials, ImageProviderConfig, KeywordProviderConfig } from './interfaces';
+import {
+  ConfigManager,
+  AppConfig,
+  AffiliateConfig,
+  PlatformCredentials,
+  ImageProviderConfig,
+  KeywordProviderConfig,
+} from './interfaces';
 
 export class ConfigManagerImpl implements ConfigManager {
   private config: AppConfig;
@@ -93,6 +100,9 @@ export class ConfigManagerImpl implements ConfigManager {
         port: 3000,
         jwtSecret: 'change-me-in-production',
         jwtExpiresIn: '7d',
+        auth: {
+          disabled: false, // NEVER enable in production
+        },
         cors: {
           origin: '*',
           credentials: true,
@@ -133,7 +143,7 @@ export class ConfigManagerImpl implements ConfigManager {
   private loadYamlFile(filePath: string): Partial<AppConfig> {
     try {
       const content = fs.readFileSync(filePath, 'utf-8');
-      return yaml.load(content) as Partial<AppConfig> || {};
+      return (yaml.load(content) as Partial<AppConfig>) || {};
     } catch (error) {
       console.error(`Failed to load config from ${filePath}:`, error);
       return {};
@@ -142,7 +152,8 @@ export class ConfigManagerImpl implements ConfigManager {
 
   private applyEnvOverrides(): void {
     const envMappings: Record<string, (value: string) => void> = {
-      [`${this.envPrefix}LOG_LEVEL`]: (v) => (this.config.app.logLevel = v as AppConfig['app']['logLevel']),
+      [`${this.envPrefix}LOG_LEVEL`]: (v) =>
+        (this.config.app.logLevel = v as AppConfig['app']['logLevel']),
       [`${this.envPrefix}DATA_DIR`]: (v) => (this.config.app.dataDir = v),
       [`${this.envPrefix}CACHE_DIR`]: (v) => (this.config.app.cacheDir = v),
       [`${this.envPrefix}OUTPUT_DIR`]: (v) => (this.config.app.outputDir = v),
@@ -151,6 +162,9 @@ export class ConfigManagerImpl implements ConfigManager {
       [`${this.envPrefix}DEFAULT_TEMPLATE`]: (v) => (this.config.templates.defaultTemplate = v),
       [`${this.envPrefix}DRY_RUN`]: (v) => (this.config.publishing.dryRun = v === 'true'),
       [`${this.envPrefix}TIMEZONE`]: (v) => (this.config.scheduler.timezone = v),
+      [`${this.envPrefix}WEB_AUTH_DISABLED`]: (v) => {
+        this.config.web.auth.disabled = v === 'true';
+      },
     };
 
     for (const [envKey, setter] of Object.entries(envMappings)) {
@@ -185,7 +199,8 @@ export class ConfigManagerImpl implements ConfigManager {
         [`${envPrefix}API_KEY`]: (v) => (this.config.affiliates[affiliateKey].apiKey = v),
         [`${envPrefix}API_SECRET`]: (v) => (this.config.affiliates[affiliateKey].apiSecret = v),
         [`${envPrefix}ACCESS_TOKEN`]: (v) => (this.config.affiliates[affiliateKey].accessToken = v),
-        [`${envPrefix}REFRESH_TOKEN`]: (v) => (this.config.affiliates[affiliateKey].refreshToken = v),
+        [`${envPrefix}REFRESH_TOKEN`]: (v) =>
+          (this.config.affiliates[affiliateKey].refreshToken = v),
         [`${envPrefix}BASE_URL`]: (v) => (this.config.affiliates[affiliateKey].baseUrl = v),
       };
 
@@ -199,7 +214,7 @@ export class ConfigManagerImpl implements ConfigManager {
   }
 
   private applyPlatformEnvOverrides(): void {
-    const platformPrefixes = ['TISTORY', 'WORDPRESS', 'YOUTUBE'];
+    const platformPrefixes = ['TISTORY', 'WORDPRESS', 'YOUTUBE', 'NAVER'];
 
     for (const prefix of platformPrefixes) {
       const platformKey = prefix.toLowerCase();
@@ -215,6 +230,7 @@ export class ConfigManagerImpl implements ConfigManager {
         [`${envPrefix}ACCESS_TOKEN`]: (v) => (this.config.platforms[platformKey].accessToken = v),
         [`${envPrefix}REFRESH_TOKEN`]: (v) => (this.config.platforms[platformKey].refreshToken = v),
         [`${envPrefix}BLOG_NAME`]: (v) => (this.config.platforms[platformKey].blogName = v),
+        [`${envPrefix}BLOG_ID`]: (v) => (this.config.platforms[platformKey].blogId = v),
         [`${envPrefix}USERNAME`]: (v) => (this.config.platforms[platformKey].username = v),
         [`${envPrefix}PASSWORD`]: (v) => (this.config.platforms[platformKey].password = v),
         [`${envPrefix}APP_PASSWORD`]: (v) => (this.config.platforms[platformKey].appPassword = v),
@@ -269,9 +285,11 @@ export class ConfigManagerImpl implements ConfigManager {
 
       const mappings: Record<string, (value: string) => void> = {
         [`${envPrefix}API_KEY`]: (v) => (this.config.keywordProviders[providerKey].apiKey = v),
-        [`${envPrefix}API_SECRET`]: (v) => (this.config.keywordProviders[providerKey].apiSecret = v),
+        [`${envPrefix}API_SECRET`]: (v) =>
+          (this.config.keywordProviders[providerKey].apiSecret = v),
         [`${envPrefix}BASE_URL`]: (v) => (this.config.keywordProviders[providerKey].baseUrl = v),
-        [`${envPrefix}USE_API_HUB`]: (v) => (this.config.keywordProviders[providerKey].useApiHub = v === 'true'),
+        [`${envPrefix}USE_API_HUB`]: (v) =>
+          (this.config.keywordProviders[providerKey].useApiHub = v === 'true'),
       };
 
       for (const [envKey, setter] of Object.entries(mappings)) {
@@ -284,7 +302,11 @@ export class ConfigManagerImpl implements ConfigManager {
   }
 
   private ensureDirectories(): void {
-    for (const dir of [this.config.app.dataDir, this.config.app.cacheDir, this.config.app.outputDir]) {
+    for (const dir of [
+      this.config.app.dataDir,
+      this.config.app.cacheDir,
+      this.config.app.outputDir,
+    ]) {
       if (!fs.existsSync(dir)) {
         fs.mkdirSync(dir, { recursive: true });
       }
@@ -296,7 +318,10 @@ export class ConfigManagerImpl implements ConfigManager {
 
     for (const source of sources) {
       if (!source) continue;
-      this.mergeObject(result as unknown as Record<string, unknown>, source as unknown as Record<string, unknown>);
+      this.mergeObject(
+        result as unknown as Record<string, unknown>,
+        source as unknown as Record<string, unknown>,
+      );
     }
 
     return result;
@@ -315,7 +340,10 @@ export class ConfigManagerImpl implements ConfigManager {
         typeof targetValue === 'object' &&
         !Array.isArray(targetValue)
       ) {
-        this.mergeObject(targetValue as Record<string, unknown>, sourceValue as Record<string, unknown>);
+        this.mergeObject(
+          targetValue as Record<string, unknown>,
+          sourceValue as Record<string, unknown>,
+        );
       } else {
         target[key] = sourceValue;
       }
@@ -338,7 +366,7 @@ export class ConfigManagerImpl implements ConfigManager {
       current = (current as Record<string, unknown>)[k];
     }
 
-    return current as T ?? defaultValue as T;
+    return (current as T) ?? (defaultValue as T);
   }
 
   set(key: string, value: unknown): void {
@@ -374,6 +402,41 @@ export class ConfigManagerImpl implements ConfigManager {
 
   getAll(): Record<string, unknown> {
     return JSON.parse(JSON.stringify(this.config));
+  }
+
+  /** Deep-merge a partial config into the in-memory config. Any string strictly equal to '***' is skipped so
+   *  masked secret values returned by GET /api/config are never written back over real secrets. */
+  mergeConfig(partial: Record<string, unknown>): void {
+    const merge = (target: Record<string, unknown>, source: Record<string, unknown>): void => {
+      for (const key of Object.keys(source)) {
+        const sourceValue = source[key];
+        if (sourceValue === '***') {
+          continue;
+        }
+        const targetValue = target[key];
+        if (
+          sourceValue !== null &&
+          typeof sourceValue === 'object' &&
+          !Array.isArray(sourceValue) &&
+          targetValue !== null &&
+          typeof targetValue === 'object' &&
+          !Array.isArray(targetValue)
+        ) {
+          merge(targetValue as Record<string, unknown>, sourceValue as Record<string, unknown>);
+        } else {
+          target[key] = sourceValue;
+        }
+      }
+    };
+    merge(this.config as unknown as Record<string, unknown>, partial);
+  }
+
+  async save(): Promise<void> {
+    // NOTE: the merged config (this.config) includes secrets loaded from secrets.yaml.
+    // Writing them into <env>.yaml is acceptable for local test (per agreed Q5); for production
+    // a stricter separation (exclude secret blobs from the PUT payload) should be used.
+    const yamlStr = yaml.dump(this.config, { skipInvalid: true });
+    fs.writeFileSync(this.configPath, yamlStr, 'utf-8');
   }
 
   getAffiliateConfig(name: string): AffiliateConfig | null {

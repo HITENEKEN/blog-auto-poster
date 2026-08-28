@@ -1,6 +1,6 @@
 ---
 name: "coupang-comparison-guide"
-platforms: ["naver-blog", "tistory", "wordpress"]
+platforms: ["naver", "tistory", "wordpress"]
 requiredFields:
   - "categoryName"
   - "products"
@@ -9,6 +9,13 @@ optionalFields:
   - "budgetRanges"
   - "recommendations"
   - "faqList"
+  - "topPosts"
+  - "experienceIntro"
+  - "realUsageStory"
+  - "whyIChoseIt"
+  - "conclusion"
+  - "usageTips"
+  - "buyingChecklist"
 seo:
   titleTemplate: "{{categoryName}} BEST {{productCount}} 비교 추천 {{currentYear}}"
   descriptionTemplate: "{{categoryName}} 구매 전 필독! 인기 제품 {{productCount}}개를 가격/성능/리뷰로 비교 분석했습니다."
@@ -24,6 +31,7 @@ jsonLd:
 .ccg-sub{color:#868e96;font-size:.9rem;margin-bottom:20px}
 .ccg-section{margin-bottom:32px}
 .ccg-section h2{font-size:1.25rem;border-bottom:2px solid #1971c2;padding-bottom:8px;margin-bottom:16px}
+.ccg-experience{background:#e7f1ff;border-left:4px solid #1e88e5;padding:14px 18px;border-radius:6px;margin-bottom:24px;font-size:15px;color:#1a3a5c;white-space:pre-line}
 .ccg-product-card{background:#fff;border:1px solid #dee2e6;border-radius:10px;overflow:hidden;margin-bottom:20px}
 .ccg-product-rank{background:#1971c2;color:#fff;display:inline-block;padding:4px 14px;font-weight:700;font-size:.9rem}
 .ccg-product-body{padding:18px}
@@ -42,8 +50,19 @@ jsonLd:
 .ccg-table td:first-child{text-align:left;font-weight:500;background:#fafafa;width:25%}
 .ccg-best{background:#fff9db;border:2px solid #fab005;border-radius:10px;padding:16px 20px;margin:20px 0}
 .ccg-best-label{font-weight:700;color:#e67700;font-size:.95rem;margin-bottom:6px}
+.ccg-why{background:#f1f8e9;border-radius:8px;padding:14px 16px;font-size:15px;color:#33691e;white-space:pre-line}
+.ccg-benchmarks{background:#f7f7fb;border:1px solid #e0e0ef;border-radius:8px;padding:14px 16px}
+.ccg-benchmarks ul{margin:0 0 10px;padding-left:20px}
+.ccg-benchmarks li{margin:6px 0}
+.ccg-benchmarks a{color:#4527a0;text-decoration:none}
+.ccg-benchmarks a:hover{text-decoration:underline}
 .ccg-faq-q{font-weight:600;margin-bottom:4px}
 .ccg-faq-a{color:#495057;font-size:.93rem;margin-bottom:14px}
+.ccg-tips{background:#fffde7;border-radius:8px;padding:14px 16px}
+.ccg-tips li{margin-bottom:8px;font-size:.93rem}
+.ccg-checklist{background:#e8f5e9;border-radius:8px;padding:14px 16px;list-style:none}
+.ccg-checklist li{margin-bottom:8px;font-size:.93rem}
+.ccg-checklist li::before{content:"☐ "}
 .ccg-notice{margin-top:28px;padding-top:14px;border-top:1px solid #eee}
 .ccg-notice small{color:#adb5bd;font-size:.78rem}
 @media(max-width:600px){.ccg-header h1{font-size:1.25rem}.ccg-table{font-size:.82rem}.ccg-table th,.ccg-table td{padding:6px}}
@@ -55,10 +74,15 @@ jsonLd:
 <p class="ccg-sub">{{currentYear}}년 기준 · 가격/성능/리뷰 종합 분석</p>
 </div>
 
+<!-- 1인칭 경험 도입부 -->
+{{#if experienceIntro}}
+<div class="ccg-experience">{{experienceIntro}}</div>
+{{/if}}
+
 <!-- 요약 -->
 <div class="ccg-section">
-<p>{{categoryName}} 구매를 고민 중이라면 이 글 하나로 끝내세요.
-인기 제품 {{productCount}}개의 스펙, 장단점, 실사용 후기를 한눈에 비교해 드립니다.</p>
+<p>{{categoryName}} 비교 고민 중이셨나요? 저도 처음엔 선택지가 너무 많아 막막했는데, 직접 여럿 써보고 비교해 보니 확실한 기준이 생기더라고요.
+이 글에서는 인기 제품 {{productCount}}개의 스펙, 장단점, 실사용 후기를 한눈에 비교해 드립니다.</p>
 </div>
 
 <!-- 전체 비교표 -->
@@ -100,6 +124,21 @@ jsonLd:
 </div>
 {{/each}}
 
+<!-- 벤치마크: 상위 블로그 (선택) -->
+{{#if topPosts}}
+<div class="ccg-section">
+<h2>다른 분들은 이걸로 골라요</h2>
+<div class="ccg-benchmarks">
+<ul>
+{{#each topPosts}}
+<li><a href="{{this.link}}" target="_blank" rel="noopener">{{this.title}}</a> — {{this.bloggername}}</li>
+{{/each}}
+</ul>
+<p>상위 블로그들을 비교해 보니, 각 제품이 강조하는 포인트가 달랐어요. 저도 직접 써보고 나서 그 차이가 체감되더라고요.</p>
+</div>
+</div>
+{{/if}}
+
 <!-- 예산별 추천 -->
 {{#if budgetRanges}}
 <div class="ccg-section">
@@ -110,6 +149,14 @@ jsonLd:
 <p style="margin:0"><strong>{{this.productName}}</strong> — {{this.reason}}</p>
 </div>
 {{/each}}
+</div>
+{{/if}}
+
+<!-- 제가 고른 이유 (경험) -->
+{{#if whyIChoseIt}}
+<div class="ccg-section">
+<h2>제가 이걸로 골라본 경험</h2>
+<div class="ccg-why">{{whyIChoseIt}}</div>
 </div>
 {{/if}}
 
@@ -126,6 +173,24 @@ jsonLd:
 </div>
 {{/if}}
 
+<!-- 실전 활용 팁 / 구매 전 체크리스트 -->
+{{#if usageTips}}
+<div class="ccg-section">
+<h2>실전 활용 팁</h2>
+<ul class="ccg-tips">
+{{#each usageTips}}<li>{{this}}</li>{{/each}}
+</ul>
+</div>
+{{/if}}
+{{#if buyingChecklist}}
+<div class="ccg-section">
+<h2>구매 전 체크리스트</h2>
+<ul class="ccg-checklist">
+{{#each buyingChecklist}}<li>{{this}}</li>{{/each}}
+</ul>
+</div>
+{{/if}}
+
 <!-- FAQ -->
 {{#if faqList}}
 <div class="ccg-section">
@@ -134,6 +199,16 @@ jsonLd:
 <p class="ccg-faq-q">Q. {{this.question}}</p>
 <p class="ccg-faq-a">A. {{this.answer}}</p>
 {{/each}}
+</div>
+{{/if}}
+
+<!-- 마무리 (경험 결론) -->
+{{#if conclusion}}
+<div class="ccg-section">
+<div class="ccg-best">
+<div class="ccg-best-label">📝 마무리</div>
+<p style="margin:0;white-space:pre-line">{{conclusion}}</p>
+</div>
 </div>
 {{/if}}
 

@@ -2,7 +2,7 @@ import React, { forwardRef, SelectHTMLAttributes } from 'react';
 import { clsx } from 'clsx';
 import { ChevronDown, ChevronUp } from 'lucide-react';
 
-interface SelectProps extends SelectHTMLAttributes<HTMLSelectElement> {}
+type SelectProps = SelectHTMLAttributes<HTMLSelectElement>;
 
 const Select = forwardRef<HTMLSelectElement, SelectProps>(
   ({ className, children, ...props }, ref) => {
@@ -11,14 +11,14 @@ const Select = forwardRef<HTMLSelectElement, SelectProps>(
         ref={ref}
         className={clsx(
           'flex h-10 w-full items-center justify-between rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50 appearance-none bg-no-repeat bg-right bg-center pr-10',
-          className
+          className,
         )}
         {...props}
       >
         {children}
       </select>
     );
-  }
+  },
 );
 Select.displayName = 'Select';
 
@@ -30,7 +30,7 @@ const SelectTrigger = forwardRef<HTMLButtonElement, React.ButtonHTMLAttributes<H
         type="button"
         className={clsx(
           'flex h-10 w-full items-center justify-between rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50',
-          className
+          className,
         )}
         {...props}
       >
@@ -38,7 +38,7 @@ const SelectTrigger = forwardRef<HTMLButtonElement, React.ButtonHTMLAttributes<H
         <ChevronDown className="h-4 w-4 opacity-50" />
       </button>
     );
-  }
+  },
 );
 SelectTrigger.displayName = 'SelectTrigger';
 
@@ -49,26 +49,27 @@ const SelectContent = forwardRef<HTMLDivElement, React.HTMLAttributes<HTMLDivEle
         ref={ref}
         className={clsx(
           'relative z-50 max-h-96 min-w-[8rem] overflow-hidden rounded-md border bg-popover text-popover-foreground shadow-md',
-          position === 'popper' && 'data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0',
-          className
+          position === 'popper' &&
+            'data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0',
+          className,
         )}
         {...props}
       >
         <div className="max-h-96 overflow-y-auto">{children}</div>
       </div>
     );
-  }
+  },
 );
 SelectContent.displayName = 'SelectContent';
 
 const SelectItem = forwardRef<HTMLDivElement, React.HTMLAttributes<HTMLDivElement>>(
-  ({ className, children, value, disabled, ...props }, ref) => {
+  ({ className, children, _value, _disabled, ...props }, ref) => {
     return (
       <div
         ref={ref}
         className={clsx(
           'relative flex w-full cursor-default select-none items-center rounded-sm py-1.5 pl-8 pr-2 text-sm outline-none focus:bg-accent focus:text-accent-foreground data-[disabled]:pointer-events-none data-[disabled]:opacity-50',
-          className
+          className,
         )}
         {...props}
       >
@@ -78,7 +79,7 @@ const SelectItem = forwardRef<HTMLDivElement, React.HTMLAttributes<HTMLDivElemen
         {children}
       </div>
     );
-  }
+  },
 );
 SelectItem.displayName = 'SelectItem';
 
@@ -89,7 +90,7 @@ const SelectValue = forwardRef<HTMLSpanElement, React.HTMLAttributes<HTMLSpanEle
         {children}
       </span>
     );
-  }
+  },
 );
 SelectValue.displayName = 'SelectValue';
 

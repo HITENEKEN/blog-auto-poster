@@ -41,7 +41,7 @@ export class AffiliateRegistry {
       throw new ConfigurationError(
         `Affiliate adapter not found: ${name}`,
         `affiliates.${name}`,
-        'ADAPTER_NOT_FOUND'
+        'ADAPTER_NOT_FOUND',
       );
     }
 
@@ -59,7 +59,9 @@ export class AffiliateRegistry {
     return adapter;
   }
 
-  async initializeAll(configs: Record<string, AffiliateConfig>): Promise<Map<string, AffiliateAdapter>> {
+  async initializeAll(
+    configs: Record<string, AffiliateConfig>,
+  ): Promise<Map<string, AffiliateAdapter>> {
     const results = new Map<string, AffiliateAdapter>();
 
     for (const [name, config] of Object.entries(configs)) {

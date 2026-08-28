@@ -1,6 +1,8 @@
 import { getLogger } from '@core/logger';
+import { getConfigManager } from '@core/config';
 import { TemplateEngineImpl } from './TemplateEngine';
 import { ImageGeneratorImpl } from './ImageGenerator';
+import { ContentGenerator, createContentGeneratorFromConfig, TopPost } from './ContentGenerator';
 import {
   PostContent,
   PlatformPostContent,
@@ -9,9 +11,12 @@ import {
   ImageGenerationResult,
   PostStatus,
 } from '@core/interfaces';
-import { TemplateError } from '@core/errors';
 
 const logger = getLogger('post-assembler');
+
+function stripHtml(input: string): string {
+  return input.replace(/<[^>]*>/g, '');
+}
 
 export interface SEOData {
   title: string;
@@ -27,11 +32,13 @@ export interface AssembleOptions {
   seoData?: SEOData;
   platform?: string;
   subId?: string;
+  benchmarkKeyword?: string;
 }
 
 export class PostAssembler {
   private templateEngine: TemplateEngineImpl;
   private imageGenerator: ImageGeneratorImpl;
+  private _contentGenerator: ContentGenerator | null | undefined;
 
   constructor(templateEngine: TemplateEngineImpl, imageGenerator: ImageGeneratorImpl) {
     this.templateEngine = templateEngine;
@@ -48,14 +55,26 @@ export class PostAssembler {
       ? `${affiliateData.productUrl}${affiliateData.productUrl.includes('?') ? '&' : '?'}subId=${subId}`
       : affiliateData.productUrl;
 
-    // Prepare template data
-    const templateData = this.prepareTemplateData(affiliateData, affiliateUrl, images, seoData);
+    // Prepare template data (async: may fetch benchmark posts + LLM copy)
+    const templateData = await this.prepareTemplateData(
+      affiliateData,
+      affiliateUrl,
+      images,
+      seoData,
+      options.benchmarkKeyword,
+    );
 
     // Render template
     const renderResult = await this.templateEngine.render(template, templateData);
 
     // Generate platform-specific content
-    const platformContent = this.generatePlatformContent(renderResult, platform, affiliateData, images, seoData);
+    const platformContent = this.generatePlatformContent(
+      renderResult,
+      platform,
+      affiliateData,
+      images,
+      seoData,
+    );
 
     const postContent: PostContent = {
       id: `post-${Date.now()}-${Math.random().toString(36).substring(7)}`,
@@ -79,23 +98,21 @@ export class PostAssembler {
     return postContent;
   }
 
-  private prepareTemplateData(
+  private async prepareTemplateData(
     affiliateData: AffiliateProduct,
     affiliateUrl: string,
     images?: ImageGenerationResult,
-    seoData?: SEOData
-  ): Record<string, unknown> {
-    const pros = affiliateData.tags?.filter(t => t.startsWith('pro:'))?.map(t => t.substring(4)) || [
-      '가성비 우수',
-      '배송 빠름',
-      '품질 만족',
-    ];
-    const cons = affiliateData.tags?.filter(t => t.startsWith('con:'))?.map(t => t.substring(4)) || [
-      '색상 옵션 부족',
-      '설명서 미흡',
-    ];
+    seoData?: SEOData,
+    benchmarkKeyword?: string,
+  ): Promise<Record<string, unknown>> {
+    const pros = affiliateData.tags
+      ?.filter((t) => t.startsWith('pro:'))
+      ?.map((t) => t.substring(4)) || ['가성비 우수', '배송 빠름', '품질 만족'];
+    const cons = affiliateData.tags
+      ?.filter((t) => t.startsWith('con:'))
+      ?.map((t) => t.substring(4)) || ['색상 옵션 부족', '설명서 미흡'];
 
-    return {
+    const templateData: Record<string, unknown> = {
       productName: affiliateData.name,
       price: affiliateData.price,
       originalPrice: affiliateData.originalPrice,
@@ -120,14 +137,89 @@ export class PostAssembler {
       seoKeywords: seoData?.keywords,
       jsonLd: seoData?.jsonLd,
     };
+
+    // Benchmark: inject top-ranking Naver blog posts for the keyword as an
+    // OPTIONAL `topPosts` field so templates can render a benchmark section.
+    const keyword = benchmarkKeyword || affiliateData.name || affiliateData.categoryName || '';
+    const topPosts = await this.fetchBenchmarkPosts(keyword);
+    if (topPosts.length > 0) {
+      templateData.topPosts = topPosts;
+    }
+
+    // LLM first-person experience copy (Q3). Optional; when absent the template
+    // falls back to its own static first-person copy.
+    try {
+      const generator = this.getContentGenerator();
+      const experience = await generator.generateExperience(
+        {
+          name: affiliateData.name,
+          categoryName: affiliateData.categoryName,
+          brand: affiliateData.brand,
+          price: affiliateData.price,
+          description: affiliateData.description,
+        },
+        keyword,
+        topPosts,
+      );
+      if (experience) {
+        templateData.experienceIntro = experience.experienceIntro;
+        templateData.realUsageStory = experience.realUsageStory;
+        templateData.whyIChoseIt = experience.whyIChoseIt;
+        templateData.conclusion = experience.conclusion;
+        templateData.usageTips = experience.usageTips;
+        templateData.buyingChecklist = experience.buyingChecklist;
+      }
+    } catch (error) {
+      logger.warn({ error: String(error) }, 'Experience generation skipped; using template copy');
+    }
+
+    return templateData;
+  }
+
+  private getContentGenerator(): ContentGenerator | null {
+    if (this._contentGenerator === undefined) {
+      try {
+        this._contentGenerator = createContentGeneratorFromConfig();
+      } catch {
+        this._contentGenerator = null;
+      }
+    }
+    return this._contentGenerator;
+  }
+
+  private async fetchBenchmarkPosts(keyword: string): Promise<TopPost[]> {
+    if (!keyword) return [];
+    try {
+      const cm = getConfigManager();
+      const hubConfig = cm.getKeywordProviderConfig('naver-api-hub');
+      if (!hubConfig?.apiKey || !hubConfig?.apiSecret) return [];
+      const { NaverApiHubKeywordProvider } = await import('../intelligence/NaverApiHubProvider.js');
+      const provider = new NaverApiHubKeywordProvider(hubConfig);
+      const res = (await provider.searchBlog(keyword, 10)) as {
+        items?: Array<Record<string, unknown>>;
+      };
+      const items = res?.items ?? [];
+      return items.slice(0, 10).map((i) => ({
+        title: stripHtml(String(i.title ?? '')),
+        bloggername: String(i.bloggername ?? ''),
+        link: String(i.link ?? ''),
+        snippet: stripHtml(String(i.description ?? '')),
+      }));
+    } catch (error) {
+      logger.warn(
+        { keyword, error: String(error) },
+        'Benchmark post fetch failed; continuing without topPosts',
+      );
+      return [];
+    }
   }
 
   private generatePlatformContent(
     renderResult: TemplateRenderResult,
     platform: string | undefined,
     affiliateData: AffiliateProduct,
-    images?: ImageGenerationResult,
-    seoData?: SEOData
+    _images?: ImageGenerationResult,
+    _seoData?: SEOData,
   ): Record<string, PlatformPostContent> {
     const baseContent: PlatformPostContent = {
       title: renderResult.title,
@@ -195,7 +287,10 @@ export class PostAssembler {
     return `${shortTitle} #Shorts`;
   }
 
-  private generateShortsDescription(renderResult: TemplateRenderResult, affiliateData: AffiliateProduct): string {
+  private generateShortsDescription(
+    renderResult: TemplateRenderResult,
+    affiliateData: AffiliateProduct,
+  ): string {
     const lines = [
       renderResult.meta?.description || '',
       '',
@@ -207,7 +302,7 @@ export class PostAssembler {
     if (renderResult.meta?.keywords) {
       const hashtags = renderResult.meta.keywords
         .slice(0, 10)
-        .map(k => `#${k.replace(/\s+/g, '')}`)
+        .map((k) => `#${k.replace(/\s+/g, '')}`)
         .join(' ');
       lines.push(hashtags);
     }
@@ -218,11 +313,14 @@ export class PostAssembler {
   private extractHashtags(keywords: string[]): string[] {
     return keywords
       .slice(0, 15)
-      .map(k => k.replace(/\s+/g, ''))
-      .filter(k => k.length > 1);
+      .map((k) => k.replace(/\s+/g, ''))
+      .filter((k) => k.length > 1);
   }
 }
 
-export function createPostAssembler(templateEngine: TemplateEngineImpl, imageGenerator: ImageGeneratorImpl): PostAssembler {
+export function createPostAssembler(
+  templateEngine: TemplateEngineImpl,
+  imageGenerator: ImageGeneratorImpl,
+): PostAssembler {
   return new PostAssembler(templateEngine, imageGenerator);
 }

@@ -82,8 +82,9 @@ export class FileCache<T = unknown> {
     }
 
     if (this.memoryCache.size > this.maxSize) {
-      const entries = Array.from(this.memoryCache.entries())
-        .sort((a, b) => a[1].createdAt - b[1].createdAt);
+      const entries = Array.from(this.memoryCache.entries()).sort(
+        (a, b) => a[1].createdAt - b[1].createdAt,
+      );
 
       const toRemove = entries.slice(0, this.memoryCache.size - this.maxSize);
       for (const [key] of toRemove) {

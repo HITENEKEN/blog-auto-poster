@@ -1,6 +1,7 @@
 # 확장 가이드
 
 ## 개요
+
 본 시스템은 **어댑터 패턴**과 **레지스트리 패턴**으로 설계되어 새로운 제휴 네트워크, 블로그 플랫폼, 이미지 생성 프로바이더, 템플릿을 코드 수정 없이 플러그인 형태로 추가할 수 있습니다.
 
 ---
@@ -8,6 +9,7 @@
 ## 1. 새 제휴 네트워크 어댑터 추가
 
 ### 1.1 인터페이스 구현
+
 ```typescript
 // src/affiliates/new-affiliate/NewAffiliateAdapter.ts
 import {
@@ -69,6 +71,7 @@ export class NewAffiliateAdapter implements AffiliateAdapter {
 ```
 
 ### 1.2 레지스트리에 등록
+
 ```typescript
 // src/affiliates/registry.ts 에 추가
 import { NewAffiliateAdapter } from './new-affiliate/NewAffiliateAdapter';
@@ -79,19 +82,21 @@ getAffiliateRegistry().register('new-affiliate', NewAffiliateAdapter);
 ```
 
 ### 1.3 설정 추가
+
 ```yaml
 # config/default.yaml
 affiliates:
   new-affiliate:
     enabled: true
-    apiKey: ""          # 환경변수 또는 secrets.yaml
-    apiSecret: ""
-    baseUrl: "https://api.new-affiliate.com"
+    apiKey: '' # 환경변수 또는 secrets.yaml
+    apiSecret: ''
+    baseUrl: 'https://api.new-affiliate.com'
     rateLimit:
       requestsPerMinute: 60
 ```
 
 ### 1.4 AffiliateConfig 인터페이스 확장 (필요시)
+
 ```typescript
 // src/core/interfaces.ts 에서 필요 필드 추가
 export interface AffiliateConfig {
@@ -101,8 +106,8 @@ export interface AffiliateConfig {
   refreshToken?: string;
   tokenExpiresAt?: number;
   trackingId?: string;
-  baseUrl?: string;           // 신규 추가
-  customField?: string;       // 어댑터별 커스텀 필드
+  baseUrl?: string; // 신규 추가
+  customField?: string; // 어댑터별 커스텀 필드
   rateLimit?: { requestsPerMinute: number };
   extra?: Record<string, unknown>;
 }
@@ -113,6 +118,7 @@ export interface AffiliateConfig {
 ## 2. 새 블로그 플랫폼 어댑터 추가
 
 ### 2.1 인터페이스 구현
+
 ```typescript
 // src/platforms/new-platform/NewPlatformAdapter.ts
 import {
@@ -128,7 +134,11 @@ import { PlatformError, AuthenticationError } from '@core/errors';
 export class NewPlatformAdapter implements PlatformAdapter {
   readonly name = 'new-platform';
   readonly supportedFeatures: PlatformFeature[] = [
-    'categories', 'tags', 'featured_image', 'media_upload', 'scheduling'
+    'categories',
+    'tags',
+    'featured_image',
+    'media_upload',
+    'scheduling',
   ];
 
   private client: AxiosInstance;
@@ -153,14 +163,22 @@ export class NewPlatformAdapter implements PlatformAdapter {
     };
   }
 
-  async updatePost(postId: string, content: Partial<PlatformPostContent>): Promise<PlatformPostResult> {
+  async updatePost(
+    postId: string,
+    content: Partial<PlatformPostContent>,
+  ): Promise<PlatformPostResult> {
     await this.client.put(`/posts/${postId}`, this.transformContent(content));
     return { postId, url: '', platform: 'new-platform', publishedAt: new Date().toISOString() };
   }
 
   async getCategories(blogName?: string): Promise<PlatformCategory[]> {
     const response = await this.client.get('/categories');
-    return response.data.map(c => ({ id: c.id, name: c.name, parentId: c.parent_id, slug: c.slug }));
+    return response.data.map((c) => ({
+      id: c.id,
+      name: c.name,
+      parentId: c.parent_id,
+      slug: c.slug,
+    }));
   }
 
   async uploadImage(imagePath: string, options?: any): Promise<PlatformImage> {
@@ -199,6 +217,7 @@ export class NewPlatformAdapter implements PlatformAdapter {
 ```
 
 ### 2.2 레지스트리에 등록
+
 ```typescript
 // src/platforms/registry.ts
 import { NewPlatformAdapter } from './new-platform/NewPlatformAdapter';
@@ -207,14 +226,15 @@ getPlatformRegistry().register('new-platform', NewPlatformAdapter);
 ```
 
 ### 2.3 설정 추가
+
 ```yaml
 # config/default.yaml
 platforms:
   new-platform:
     enabled: false
-    baseURL: "https://api.new-platform.com"
-    username: ""      # 환경변수
-    apiKey: ""        # 환경변수
+    baseURL: 'https://api.new-platform.com'
+    username: '' # 환경변수
+    apiKey: '' # 환경변수
     rateLimit:
       requestsPerMinute: 30
 ```
@@ -224,6 +244,7 @@ platforms:
 ## 3. 새 이미지 생성 프로바이더 추가
 
 ### 3.1 인터페이스 구현
+
 ```typescript
 // src/content/providers/NewImageProvider.ts
 import { ImageProvider, ImageGenerationOptions, ImageGenerationResult } from '@core/interfaces';
@@ -243,7 +264,7 @@ export class NewImageProvider implements ImageProvider {
     });
 
     return {
-      urls: response.data.images.map(img => img.url),
+      urls: response.data.images.map((img) => img.url),
       localPaths: [], // 다운로드는 ImageGeneratorImpl에서 처리
       provider: this.name,
     };
@@ -256,6 +277,7 @@ export class NewImageProvider implements ImageProvider {
 ```
 
 ### 3.2 등록
+
 ```typescript
 // 사용 시
 const imageGenerator = createImageGenerator();
@@ -268,61 +290,75 @@ imageGenerator.setDefaultProvider('new-provider');
 ## 4. 새 템플릿 추가
 
 ### 4.1 템플릿 파일 생성
+
 ```handlebars
 ---
-name: "my-custom-template"
-platforms: ["tistory", "wordpress", "youtube-shorts"]
-requiredFields: ["productName", "price", "pros", "cons", "affiliateUrl"]
-optionalFields: ["originalPrice", "discountRate", "rating", "reviewCount", "imageUrl", "brand", "categoryName", "description", "specs"]
+name: 'my-custom-template'
+platforms: ['tistory', 'wordpress', 'youtube-shorts']
+requiredFields: ['productName', 'price', 'pros', 'cons', 'affiliateUrl']
+optionalFields:
+  [
+    'originalPrice',
+    'discountRate',
+    'rating',
+    'reviewCount',
+    'imageUrl',
+    'brand',
+    'categoryName',
+    'description',
+    'specs',
+  ]
 seo:
-  titleTemplate: "{{productName}} 리뷰 - 맞춤형 템플릿"
-  descriptionTemplate: "{{productName}} 구매 가이드. 가격 {{price}}원..."
-  keywords: ["{{productName}}", "리뷰", "추천", "{{categoryName}}"]
+  titleTemplate: '{{productName}} 리뷰 - 맞춤형 템플릿'
+  descriptionTemplate: '{{productName}} 구매 가이드. 가격 {{price}}원...'
+  keywords: ['{{productName}}', '리뷰', '추천', '{{categoryName}}']
   jsonLd:
-    type: "Product"
+    type: 'Product'
     includeReview: true
     includeAggregateRating: true
 ---
 
-<div class="my-template">
+<div class='my-template'>
   <h1>{{productName}}</h1>
-  
+
   {{#if imageUrl}}
-  <img src="{{imageUrl}}" alt="{{productName}}" loading="lazy" />
+    <img src='{{imageUrl}}' alt='{{productName}}' loading='lazy' />
   {{/if}}
 
-  <div class="price">{{formatPrice price}}원</div>
+  <div class='price'>{{formatPrice price}}원</div>
 
-  <section class="pros">
+  <section class='pros'>
     <h3>장점</h3>
     <ul>{{#each pros}}<li>{{this}}</li>{{/each}}</ul>
   </section>
 
-  <section class="cons">
+  <section class='cons'>
     <h3>단점</h3>
     <ul>{{#each cons}}<li>{{this}}</li>{{/each}}</ul>
   </section>
 
-  <a href="{{affiliateUrl}}" target="_blank" rel="nofollow sponsored" class="cta">
+  <a href='{{affiliateUrl}}' target='_blank' rel='nofollow sponsored' class='cta'>
     구매하러 가기 →
   </a>
 </div>
 
 <style>
-/* 템플릿 전용 CSS */
+  /* 템플릿 전용 CSS */
 </style>
 ```
 
 ### 4.2 템플릿 저장
+
 ```bash
 # templates/my-custom-template.hbs 로 저장
 # 자동으로 로드됨 (TemplateEngine.loadTemplates() 시 *.hbs 파일 스캔)
 ```
 
 ### 4.3 템플릿 헬퍼 추가 (필요시)
+
 ```typescript
 // TemplateEngineImpl.registerBuiltinHelpers() 내부 또는 외부에서
-Handlebars.registerHelper('myCustomHelper', function(value: any, options: HandlebarsOptions) {
+Handlebars.registerHelper('myCustomHelper', function (value: any, options: HandlebarsOptions) {
   // 커스텀 로직
   return transformedValue;
 });
@@ -333,21 +369,23 @@ Handlebars.registerHelper('myCustomHelper', function(value: any, options: Handle
 ## 5. 새 스케줄러 잡 추가
 
 ### 5.1 설정 추가
+
 ```yaml
 # config/default.yaml
 scheduler:
   jobs:
-    - name: "my-custom-job"
-      type: "GENERATE"  # RESEARCH | GENERATE | PUBLISH | SYNC_ANALYTICS | REFRESH_TOKEN | CLEANUP
-      cron: "0 9 * * *"  # 매일 09:00
+    - name: 'my-custom-job'
+      type: 'GENERATE' # RESEARCH | GENERATE | PUBLISH | SYNC_ANALYTICS | REFRESH_TOKEN | CLEANUP
+      cron: '0 9 * * *' # 매일 09:00
       enabled: true
       priority: 5
       maxAttempts: 3
       config:
-        customParam: "value"
+        customParam: 'value'
 ```
 
 ### 5.2 프로세서 등록 (필요시)
+
 ```typescript
 // src/scheduler/index.ts 또는 별도 파일
 const jobQueue = createJobQueue();
@@ -364,6 +402,7 @@ jobQueue.registerProcessor('CUSTOM_TYPE', async (job: Job) => {
 ## 6. 새 CLI 명령어 추가
 
 ### 6.1 명령어 정의
+
 ```typescript
 // src/cli/index.ts
 program
@@ -373,9 +412,9 @@ program
   .action(async (options) => {
     const configDir = program.opts().config;
     const env = program.opts().env;
-    
+
     await initializeServices(configDir, env);
-    
+
     // 로직 구현
     console.log('실행됨:', options.param);
   });
@@ -386,6 +425,7 @@ program
 ## 7. 새 웹 대시보드 페이지 추가
 
 ### 7.1 페이지 컴포넌트 생성
+
 ```tsx
 // src/web/client/src/pages/MyPage.tsx
 import { useEffect, useState } from 'react';
@@ -396,30 +436,32 @@ export default function MyPage() {
   const [data, setData] = useState<any>(null);
 
   useEffect(() => {
-    api.get('/api/my-endpoint').then(res => setData(res.data));
+    api.get('/api/my-endpoint').then((res) => setData(res.data));
   }, []);
 
   return (
     <Card>
-      <CardHeader><CardTitle>내 커스텀 페이지</CardTitle></CardHeader>
-      <CardContent>
-        {/* UI 구현 */}
-      </CardContent>
+      <CardHeader>
+        <CardTitle>내 커스텀 페이지</CardTitle>
+      </CardHeader>
+      <CardContent>{/* UI 구현 */}</CardContent>
     </Card>
   );
 }
 ```
 
 ### 7.2 라우터 등록
+
 ```tsx
 // src/web/client/src/App.tsx
 import MyPage from './pages/MyPage';
 
 // Routes 내부에 추가
-<Route path="my-page" element={<MyPage />} />
+<Route path="my-page" element={<MyPage />} />;
 ```
 
 ### 7.3 사이드바 네비게이션 추가
+
 ```tsx
 // src/web/client/src/components/Layout.tsx
 const navigation = [
@@ -429,6 +471,7 @@ const navigation = [
 ```
 
 ### 7.4 API 엔드포인트 추가
+
 ```typescript
 // src/web/server/routes/index.ts
 app.get('/api/my-endpoint', async () => {
@@ -441,12 +484,14 @@ app.get('/api/my-endpoint', async () => {
 ## 8. 타입 안전성 유지 가이드
 
 ### 8.1 인터페이스 변경 시 체크리스트
+
 - [ ] `src/core/interfaces.ts` 에서 인터페이스 수정
 - [ ] `tsc --noEmit` 으로 타입 에러 확인
 - [ ] 구현체들(`*Adapter.ts`, `*Impl.ts`)에서 컴파일 에러 수정
 - [ ] 관련 테스트 업데이트
 
 ### 8.2 엄격 모드 준수
+
 ```typescript
 // ❌ 금지: any 타입 사용
 const data: any = fetchData();
@@ -457,8 +502,8 @@ const data = fetchData<MyType>();
 
 // ✅ 선택적 속성은 undefined 포함 명시
 interface Config {
-  optionalField?: string;  // undefined 허용
-  requiredField: string;   // 필수
+  optionalField?: string; // undefined 허용
+  requiredField: string; // 필수
 }
 ```
 
@@ -467,6 +512,7 @@ interface Config {
 ## 9. 테스트 작성 가이드
 
 ### 9.1 단위 테스트 (Vitest)
+
 ```typescript
 // tests/unit/NewAdapter.test.ts
 import { describe, it, expect, vi } from 'vitest';
@@ -483,6 +529,7 @@ describe('NewAffiliateAdapter', () => {
 ```
 
 ### 9.2 통합 테스트
+
 ```typescript
 // tests/integration/pipeline.test.ts
 import { describe, it, expect } from 'vitest';

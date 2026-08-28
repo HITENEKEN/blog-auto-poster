@@ -1,4 +1,3 @@
-// @ts-nocheck
 import { getLogger } from '@core/logger';
 import { getCache } from '@core/cache';
 import { createHttpClient } from '@core/http';
@@ -8,14 +7,23 @@ import {
   KeywordResearchOptions,
   KeywordProviderConfig,
 } from '@core/interfaces';
-import { ValidationError } from '@core/errors';
 
 const logger = getLogger('keyword-researcher');
+
+type SerpApiTrendsData = {
+  interest_over_time?: {
+    timeline_data?: Array<{ values: Array<{ value?: number }> }>;
+  };
+  related_queries?: {
+    top?: Array<{ query: string }>;
+  };
+};
 
 export class NaverKeywordProvider implements KeywordProvider {
   readonly name = 'naver';
   private client: ReturnType<typeof createHttpClient>;
   private cache = getCache<KeywordData[]>('naver-keywords');
+  private relatedCache = getCache<string[]>('naver-related-keywords');
   private clientId: string;
   private clientSecret: string;
 
@@ -87,7 +95,7 @@ export class NaverKeywordProvider implements KeywordProvider {
 
   async getRelatedKeywords(keyword: string): Promise<string[]> {
     const cacheKey = `related:${keyword}`;
-    const cached = this.cache.get(cacheKey);
+    const cached = this.relatedCache.get(cacheKey);
     if (cached) return cached;
 
     try {
@@ -95,8 +103,9 @@ export class NaverKeywordProvider implements KeywordProvider {
         params: { query: keyword, display: 20 },
       });
 
-      const related = response.data.categories?.map((c: any) => c.name) || [];
-      this.cache.set(cacheKey, related, 86400);
+      const related: string[] =
+        response.data.categories?.map((c: { name: string }) => c.name) || [];
+      this.relatedCache.set(cacheKey, related, 86400);
       return related;
     } catch {
       return [];
@@ -109,7 +118,9 @@ export class NaverKeywordProvider implements KeywordProvider {
     return Math.round(avgRatio * 10000); // Rough estimate
   }
 
-  private calculateTrend(dataPoints: Array<{ period: string; ratio: number }>): 'rising' | 'falling' | 'stable' {
+  private calculateTrend(
+    dataPoints: Array<{ period: string; ratio: number }>,
+  ): 'rising' | 'falling' | 'stable' {
     if (!dataPoints || dataPoints.length < 2) return 'stable';
     const recent = dataPoints.slice(-4).reduce((sum, d) => sum + d.ratio, 0) / 4;
     const older = dataPoints.slice(0, 4).reduce((sum, d) => sum + d.ratio, 0) / 4;
@@ -181,7 +192,10 @@ export class GoogleTrendsProvider implements KeywordProvider {
     return this.researchUnofficial(keywords, options);
   }
 
-  private async researchWithSerpApi(keywords: string[], options?: KeywordResearchOptions): Promise<KeywordData[]> {
+  private async researchWithSerpApi(
+    keywords: string[],
+    options?: KeywordResearchOptions,
+  ): Promise<KeywordData[]> {
     const results: KeywordData[] = [];
 
     for (const keyword of keywords) {
@@ -199,7 +213,12 @@ export class GoogleTrendsProvider implements KeywordProvider {
             engine: 'google_trends',
             q: keyword,
             data_type: 'TIMESERIES',
-            date: options?.period === 'day' ? 'now 7-d' : options?.period === 'week' ? 'now 30-d' : 'today 12-m',
+            date:
+              options?.period === 'day'
+                ? 'now 7-d'
+                : options?.period === 'week'
+                  ? 'now 30-d'
+                  : 'today 12-m',
           },
         });
 
@@ -208,7 +227,7 @@ export class GoogleTrendsProvider implements KeywordProvider {
           volume: this.estimateVolumeFromSerpApi(response.data),
           competition: 0.5,
           trend: this.calculateTrendFromSerpApi(response.data),
-          related: response.data.related_queries?.top?.map((q: any) => q.query) || [],
+          related: response.data.related_queries?.top?.map((q: { query: string }) => q.query) || [],
           source: 'google-trends',
         };
 
@@ -222,7 +241,10 @@ export class GoogleTrendsProvider implements KeywordProvider {
     return results;
   }
 
-  private async researchUnofficial(keywords: string[], options?: KeywordResearchOptions): Promise<KeywordData[]> {
+  private async researchUnofficial(
+    keywords: string[],
+    _options?: KeywordResearchOptions,
+  ): Promise<KeywordData[]> {
     // Unofficial Google Trends - limited functionality
     const results: KeywordData[] = [];
 
@@ -240,16 +262,16 @@ export class GoogleTrendsProvider implements KeywordProvider {
     return results;
   }
 
-  private estimateVolumeFromSerpApi(data: any): number {
+  private estimateVolumeFromSerpApi(data: SerpApiTrendsData): number {
     if (!data.interest_over_time?.timeline_data) return 0;
-    const values = data.interest_over_time.timeline_data.map((d: any) => d.values[0]?.value || 0);
+    const values = data.interest_over_time.timeline_data.map((d) => d.values[0]?.value || 0);
     const avg = values.reduce((a: number, b: number) => a + b, 0) / values.length;
     return Math.round(avg * 100);
   }
 
-  private calculateTrendFromSerpApi(data: any): 'rising' | 'falling' | 'stable' {
+  private calculateTrendFromSerpApi(data: SerpApiTrendsData): 'rising' | 'falling' | 'stable' {
     if (!data.interest_over_time?.timeline_data) return 'stable';
-    const values = data.interest_over_time.timeline_data.map((d: any) => d.values[0]?.value || 0);
+    const values = data.interest_over_time.timeline_data.map((d) => d.values[0]?.value || 0);
     if (values.length < 2) return 'stable';
     const recent = values.slice(-4).reduce((a: number, b: number) => a + b, 0) / 4;
     const older = values.slice(0, 4).reduce((a: number, b: number) => a + b, 0) / 4;
@@ -268,10 +290,8 @@ export class CoupangKeywordProvider implements KeywordProvider {
   readonly name = 'coupang';
   private client: ReturnType<typeof createHttpClient>;
   private cache = getCache<KeywordData[]>('coupang-keywords');
-  private affiliateClient: any; // Reference to CoupangAdapter
 
-  constructor(affiliateClient?: any) {
-    this.affiliateClient = affiliateClient;
+  constructor() {
     this.client = createHttpClient({
       baseURL: 'https://api-gateway.coupang.com',
       timeout: 30000,
@@ -321,13 +341,13 @@ export class CoupangKeywordProvider implements KeywordProvider {
       const response = await this.client.get('/v2/affiliate/autocomplete', {
         params: { keyword },
       });
-      return response.data.data?.map((d: any) => d.keyword) || [];
+      return response.data.data?.map((d: { keyword: string }) => d.keyword) || [];
     } catch {
       return [];
     }
   }
 
-  private async getBestSellers(category?: string): Promise<string[]> {
+  private async getBestSellers(_category?: string): Promise<string[]> {
     try {
       // This would use the CoupangAdapter's searchProducts
       // For now, return empty
@@ -354,7 +374,10 @@ export class KeywordResearcher {
     return this.providers.get(name);
   }
 
-  async research(seedKeywords: string[], options: KeywordResearchOptions = {}): Promise<KeywordData[]> {
+  async research(
+    seedKeywords: string[],
+    options: KeywordResearchOptions = {},
+  ): Promise<KeywordData[]> {
     const { providers = ['google-trends', 'coupang'], limit = 50 } = options;
 
     logger.info({ seedKeywords, providers, limit }, 'Starting keyword research');
@@ -402,10 +425,13 @@ export class KeywordResearcher {
         existing.competition = Math.min(existing.competition, result.competition);
         existing.trend = this.mergeTrend(existing.trend, result.trend);
         existing.related = [...new Set([...existing.related, ...result.related])];
-        existing.metadata = { 
-          ...existing.metadata, 
-          ...result.metadata, 
-          sources: [...(existing.metadata?.sources || []), result.source] 
+        existing.metadata = {
+          ...existing.metadata,
+          ...result.metadata,
+          sources: [
+            ...(Array.isArray(existing.metadata?.sources) ? existing.metadata.sources : []),
+            result.source,
+          ],
         };
       }
     }
@@ -413,14 +439,18 @@ export class KeywordResearcher {
     return Array.from(map.values());
   }
 
-  private mergeTrend(a: 'rising' | 'falling' | 'stable', b: 'rising' | 'falling' | 'stable'): 'rising' | 'falling' | 'stable' {
+  private mergeTrend(
+    a: 'rising' | 'falling' | 'stable',
+    b: 'rising' | 'falling' | 'stable',
+  ): 'rising' | 'falling' | 'stable' {
     if (a === 'rising' || b === 'rising') return 'rising';
     if (a === 'falling' || b === 'falling') return 'falling';
     return 'stable';
   }
 
   private calculateScore(keyword: KeywordData): number {
-    const trendMultiplier = keyword.trend === 'rising' ? 1.5 : keyword.trend === 'falling' ? 0.7 : 1;
+    const trendMultiplier =
+      keyword.trend === 'rising' ? 1.5 : keyword.trend === 'falling' ? 0.7 : 1;
     return keyword.volume * (1 - keyword.competition) * trendMultiplier;
   }
 

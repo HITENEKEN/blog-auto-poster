@@ -36,7 +36,9 @@
       "@affiliates/*": ["./src/affiliates/*"],
       "@content/*": ["./src/content/*"],
       "@scheduler/*": ["./src/scheduler/*"],
-      "@cli/*": ["./src/cli/*"]
+      "@cli/*": ["./src/cli/*"],
+      "@platforms": ["./src/platforms/index.ts"],
+      "@platforms/*": ["./src/platforms/*"]
     },
     "typeRoots": ["./node_modules/@types", "./src/types"]
   },
@@ -48,7 +50,8 @@
     "src/cli/**/*",
     "src/web/server/**/*",
     "src/web/shared/**/*",
+    "src/platforms/**/*",
     "src/intelligence/NaverApiHubProvider.ts"
   ],
-  "exclude": ["node_modules", "dist", "tests", "scripts", "src/web/client", "src/platforms"]
+  "exclude": ["node_modules", "dist", "tests", "scripts", "src/web/client"]
 }

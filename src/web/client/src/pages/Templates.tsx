@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { api } from '../services/api';
-import { Card, CardContent, CardHeader, CardTitle } from './ui/Card';
+import { Card, CardContent, CardHeader } from './ui/Card';
 import { Button } from './ui/Button';
 import { Badge } from './ui/Badge';
 import { Input } from './ui/Input';
@@ -16,7 +16,6 @@ import {
   X,
   Monitor,
   Smartphone,
-  FileText,
 } from 'lucide-react';
 
 interface TemplateInfo {
@@ -26,13 +25,6 @@ interface TemplateInfo {
   requiredFields: string[];
   optionalFields?: string[];
   seoTitleTemplate?: string;
-}
-
-interface TemplateDetail {
-  name: string;
-  content: string;
-  raw: string;
-  frontmatter: Record<string, any>;
 }
 
 type ViewMode = 'list' | 'editor' | 'preview';
@@ -50,7 +42,9 @@ export default function Templates() {
   const [previewLoading, setPreviewLoading] = useState(false);
   const [deviceView, setDeviceView] = useState<'desktop' | 'mobile'>('desktop');
 
-  useEffect(() => { fetchTemplates(); }, []);
+  useEffect(() => {
+    fetchTemplates();
+  }, []);
 
   const fetchTemplates = async () => {
     setLoading(true);
@@ -143,7 +137,7 @@ seo:
     try {
       const response = await api.post(`/api/templates/${name}/preview`);
       setPreviewHtml(response.data.html || `<p style="color:red;">${response.data.error}</p>`);
-    } catch (error) {
+    } catch {
       setPreviewHtml('<p style="color:red;">미리보기 생성 실패</p>');
     } finally {
       setPreviewLoading(false);
@@ -165,14 +159,18 @@ seo:
         </div>
 
         {loading ? (
-          <Card><CardContent className="flex items-center justify-center h-64">
-            <Loader2 className="h-8 w-8 animate-spin text-primary" />
-          </CardContent></Card>
+          <Card>
+            <CardContent className="flex items-center justify-center h-64">
+              <Loader2 className="h-8 w-8 animate-spin text-primary" />
+            </CardContent>
+          </Card>
         ) : templates.length === 0 ? (
-          <Card><CardContent className="p-12 text-center">
-            <FileCode className="h-12 w-12 mx-auto mb-4 text-muted-foreground opacity-30" />
-            <p>템플릿이 없습니다. 새 템플릿을 만들어보세요.</p>
-          </CardContent></Card>
+          <Card>
+            <CardContent className="p-12 text-center">
+              <FileCode className="h-12 w-12 mx-auto mb-4 text-muted-foreground opacity-30" />
+              <p>템플릿이 없습니다. 새 템플릿을 만들어보세요.</p>
+            </CardContent>
+          </Card>
         ) : (
           <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
             {templates.map((t) => (
@@ -182,7 +180,9 @@ seo:
                     <FileCode className="h-5 w-5 text-primary shrink-0" />
                     <div className="min-w-0">
                       <h3 className="font-semibold truncate">{t.name}</h3>
-                      <Badge variant="outline" className="mt-1">{t.filename}</Badge>
+                      <Badge variant="outline" className="mt-1">
+                        {t.filename}
+                      </Badge>
                     </div>
                   </div>
                 </CardHeader>
@@ -190,7 +190,9 @@ seo:
                   {t.platforms?.length > 0 && (
                     <div className="flex flex-wrap gap-1">
                       {t.platforms.map((p) => (
-                        <Badge key={p} variant="secondary" className="text-xs capitalize">{p}</Badge>
+                        <Badge key={p} variant="secondary" className="text-xs capitalize">
+                          {p}
+                        </Badge>
                       ))}
                     </div>
                   )}
@@ -199,26 +201,57 @@ seo:
                       <p className="text-xs text-muted-foreground mb-1">필수 필드</p>
                       <div className="flex flex-wrap gap-1">
                         {t.requiredFields.slice(0, 5).map((f) => (
-                          <span key={f} className="inline-block px-2 py-0.5 rounded bg-muted text-xs">{f}</span>
+                          <span
+                            key={f}
+                            className="inline-block px-2 py-0.5 rounded bg-muted text-xs"
+                          >
+                            {f}
+                          </span>
                         ))}
                         {t.requiredFields.length > 5 && (
-                          <span className="text-xs text-muted-foreground">+{t.requiredFields.length - 5}</span>
+                          <span className="text-xs text-muted-foreground">
+                            +{t.requiredFields.length - 5}
+                          </span>
                         )}
                       </div>
                     </div>
                   )}
                   <div className="grid grid-cols-3 gap-1.5 pt-2">
-                    <Button variant="outline" size="sm" className="w-full" onClick={() => handlePreview(t.name)}>
-                      <Eye className="h-3.5 w-3.5 mr-1" />미리보기
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      className="w-full"
+                      onClick={() => handlePreview(t.name)}
+                    >
+                      <Eye className="h-3.5 w-3.5 mr-1" />
+                      미리보기
                     </Button>
-                    <Button variant="ghost" size="sm" className="w-full" onClick={() => handleEdit(t.name)}>
-                      <Edit3 className="h-3.5 w-3.5 mr-1" />편집
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      className="w-full"
+                      onClick={() => handleEdit(t.name)}
+                    >
+                      <Edit3 className="h-3.5 w-3.5 mr-1" />
+                      편집
                     </Button>
                     <div className="flex gap-0.5">
-                      <Button variant="ghost" size="sm" className="px-2 flex-1" onClick={() => handleCopy(t.name)} title="복제">
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        className="px-2 flex-1"
+                        onClick={() => handleCopy(t.name)}
+                        title="복제"
+                      >
                         <Copy className="h-3.5 w-3.5" />
                       </Button>
-                      <Button variant="ghost" size="sm" className="px-2 flex-1 text-destructive hover:text-destructive" onClick={() => handleDelete(t.name)} title="삭제">
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        className="px-2 flex-1 text-destructive hover:text-destructive"
+                        onClick={() => handleDelete(t.name)}
+                        title="삭제"
+                      >
                         <Trash2 className="h-3.5 w-3.5" />
                       </Button>
                     </div>
@@ -257,7 +290,8 @@ seo:
               </button>
             </div>
             <Button variant="outline" onClick={() => setView('list')}>
-              <X className="h-4 w-4 mr-1" />닫기
+              <X className="h-4 w-4 mr-1" />
+              닫기
             </Button>
           </div>
         </div>
@@ -271,9 +305,11 @@ seo:
               </div>
             ) : (
               <div
-                className={deviceView === 'mobile'
-                  ? 'mx-auto max-w-[375px] border rounded-lg overflow-hidden shadow-lg'
-                  : 'max-w-full'}
+                className={
+                  deviceView === 'mobile'
+                    ? 'mx-auto max-w-[375px] border rounded-lg overflow-hidden shadow-lg'
+                    : 'max-w-full'
+                }
                 style={{ minHeight: 400 }}
               >
                 <iframe
@@ -299,19 +335,22 @@ seo:
           {isNewTemplate ? '새 템플릿' : `편집: ${editingName}`}
         </h2>
         <Button variant="outline" onClick={() => setView('list')}>
-          <X className="h-4 w-4 mr-1" />취소
+          <X className="h-4 w-4 mr-1" />
+          취소
         </Button>
       </div>
 
       {isNewTemplate && (
-        <Card><CardContent className="pt-6 pb-6">
-          <label className="block text-sm font-medium mb-1">템플릿 이름 (영문/숫자)</label>
-          <Input
-            placeholder="my-custom-template"
-            value={newTemplateName}
-            onChange={(e) => setNewTemplateName(e.target.value.replace(/[^a-zA-Z0-9-_]/g, ''))}
-          />
-        </CardContent></Card>
+        <Card>
+          <CardContent className="pt-6 pb-6">
+            <label className="block text-sm font-medium mb-1">템플릿 이름 (영문/숫자)</label>
+            <Input
+              placeholder="my-custom-template"
+              value={newTemplateName}
+              onChange={(e) => setNewTemplateName(e.target.value.replace(/[^a-zA-Z0-9-_]/g, ''))}
+            />
+          </CardContent>
+        </Card>
       )}
 
       <Card>
@@ -328,7 +367,11 @@ seo:
               Handlebars 문법 지원: {'{{#each}}'}, {'{{#if}}'}, {'{{formatPrice price}}'} 등
             </p>
             <Button onClick={handleSave} disabled={saving}>
-              {saving ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : <Save className="h-4 w-4 mr-2" />}
+              {saving ? (
+                <Loader2 className="h-4 w-4 animate-spin mr-2" />
+              ) : (
+                <Save className="h-4 w-4 mr-2" />
+              )}
               저장
             </Button>
           </div>

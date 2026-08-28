@@ -1,6 +1,6 @@
 ---
 name: "coupang-partner-review"
-platforms: ["naver-blog", "tistory", "wordpress"]
+platforms: ["naver", "tistory", "wordpress"]
 requiredFields:
   - "productName"
   - "price"
@@ -21,6 +21,13 @@ optionalFields:
   - "faqList"
   - "targetAudience"
   - "oneLineReview"
+  - "topPosts"
+  - "experienceIntro"
+  - "realUsageStory"
+  - "whyIChoseIt"
+  - "conclusion"
+  - "usageTips"
+  - "buyingChecklist"
 seo:
   titleTemplate: "{{productName}} 솔직 리뷰 - 장단점 총정리 {{currentYear}}"
   descriptionTemplate: "{{productName}} 실사용 후기. 가격 {{price}}원{{#if discountRate}}, {{discountRate}}% 할인 중{{/if}}. 장점과 단점을 균형있게 정리했습니다."
@@ -39,6 +46,7 @@ jsonLd:
 .cpr-header h1{font-size:1.6rem;line-height:1.4;margin:0 0 8px;color:#212529}
 .cpr-meta{font-size:.85rem;color:#868e96;margin-bottom:20px}
 .cpr-meta span{margin-right:12px}
+.cpr-experience{background:#e7f1ff;border-left:4px solid #1e88e5;padding:14px 18px;border-radius:6px;margin-bottom:24px;font-size:15px;color:#1a3a5c;white-space:pre-line}
 .cpr-price-card{background:#fff;border:2px solid #e03131;border-radius:10px;padding:20px;text-align:center;margin-bottom:28px}
 .cpr-price{font-size:1.8rem;font-weight:700;color:#e03131}
 .cpr-original{font-size:1rem;color:#adb5bd;text-decoration:line-through;margin-left:8px}
@@ -66,6 +74,17 @@ jsonLd:
 .cpr-faq-q{font-weight:600;color:#212529;margin-bottom:6px}
 .cpr-faq-a{color:#495057;font-size:.95rem}
 .cpr-audience li{margin-bottom:8px;font-size:.95rem}
+.cpr-tips{background:#fffde7;border-radius:8px;padding:14px 16px}
+.cpr-tips li{margin-bottom:8px;font-size:.95rem}
+.cpr-checklist{background:#e8f5e9;border-radius:8px;padding:14px 16px;list-style:none}
+.cpr-checklist li{margin-bottom:8px;font-size:.95rem}
+.cpr-checklist li::before{content:"☐ "}
+.cpr-why{background:#f1f8e9;border-radius:8px;padding:14px 16px;font-size:15px;color:#33691e;white-space:pre-line}
+.cpr-benchmarks{background:#f7f7fb;border:1px solid #e0e0ef;border-radius:8px;padding:14px 16px}
+.cpr-benchmarks ul{margin:0 0 10px;padding-left:20px}
+.cpr-benchmarks li{margin:6px 0}
+.cpr-benchmarks a{color:#4527a0;text-decoration:none}
+.cpr-benchmarks a:hover{text-decoration:underline}
 .cpr-final{text-align:center;margin:32px 0;padding:24px;background:#fff5f5;border-radius:10px}
 .cpr-cta-large{display:inline-block;background:#e03131;color:#fff;padding:16px 36px;border-radius:10px;text-decoration:none;font-size:1.15rem;font-weight:700}
 .cpr-cta-large:hover{opacity:.88}
@@ -89,6 +108,11 @@ jsonLd:
 </p>
 </div>
 
+<!-- 1인칭 경험 도입부 -->
+{{#if experienceIntro}}
+<div class="cpr-experience">{{experienceIntro}}</div>
+{{/if}}
+
 {{#if imageUrl}}
 <img src="{{imageUrl}}" alt="{{productName}}" class="cpr-img" loading="lazy" />
 {{/if}}
@@ -110,12 +134,16 @@ jsonLd:
 </tr>
 </table>
 
-<!-- ⑤ 상세 리뷰 -->
+<!-- ⑤ 상세 리뷰 (1인칭 실사용기) -->
 <div class="cpr-section">
-<h2>상세 리뷰</h2>
+<h2>제가 직접 써본 상세 후기</h2>
+{{#if realUsageStory}}
+<p style="white-space:pre-line">{{realUsageStory}}</p>
+{{else}}
 {{#if description}}
 <h3>제품 소개</h3>
 <p>{{description}}</p>
+{{/if}}
 {{/if}}
 {{#if specs}}
 <h3>주요 스펙</h3>
@@ -140,7 +168,30 @@ jsonLd:
 </div>
 {{/if}}
 
-<!-- ⑦ 추천 대상 -->
+<!-- ⑦ 벤치마크: 상위 블로그 (선택) -->
+{{#if topPosts}}
+<div class="cpr-section">
+<h2>다른 분들은 이렇게 쓰셨더라고요</h2>
+<div class="cpr-benchmarks">
+<ul>
+{{#each topPosts}}
+<li><a href="{{this.link}}" target="_blank" rel="noopener">{{this.title}}</a> — {{this.bloggername}}</li>
+{{/each}}
+</ul>
+<p>상위 블로그들을 벤치마킹해 보니 공통적으로 강조하는 포인트를 발견할 수 있었어요. 저도 써보고 나서 그 말에 충분히 공감했습니다.</p>
+</div>
+</div>
+{{/if}}
+
+<!-- ⑧ 제가 고른 이유 (경험) -->
+{{#if whyIChoseIt}}
+<div class="cpr-section">
+<h2>왜 이 제품을 골랐는지</h2>
+<div class="cpr-why">{{whyIChoseIt}}</div>
+</div>
+{{/if}}
+
+<!-- ⑨ 추천 대상 -->
 {{#if targetAudience}}
 <div class="cpr-section">
 <h2>이런 분께 추천합니다</h2>
@@ -150,7 +201,25 @@ jsonLd:
 </div>
 {{/if}}
 
-<!-- ⑧ FAQ -->
+<!-- 실전 활용 팁 / 구매 전 체크리스트 -->
+{{#if usageTips}}
+<div class="cpr-section">
+<h2>실전 활용 팁</h2>
+<ul class="cpr-tips">
+{{#each usageTips}}<li>{{this}}</li>{{/each}}
+</ul>
+</div>
+{{/if}}
+{{#if buyingChecklist}}
+<div class="cpr-section">
+<h2>구매 전 체크리스트</h2>
+<ul class="cpr-checklist">
+{{#each buyingChecklist}}<li>{{this}}</li>{{/each}}
+</ul>
+</div>
+{{/if}}
+
+<!-- ⑩ FAQ -->
 {{#if faqList}}
 <div class="cpr-section">
 <h2>자주 묻는 질문</h2>
@@ -163,7 +232,16 @@ jsonLd:
 </div>
 {{/if}}
 
-<!-- ⑨ 최종 CTA -->
+<!-- ⑪ 마무리 (경험 결론) -->
+{{#if conclusion}}
+<div class="cpr-section">
+<div class="cpr-final" style="margin-top:0">
+<p style="margin:0 0 12px;font-weight:600;white-space:pre-line">{{conclusion}}</p>
+</div>
+</div>
+{{/if}}
+
+<!-- ⑫ 최종 CTA -->
 <div class="cpr-final">
 <p style="margin:0 0 12px;font-weight:600;">지금 최저가를 확인하세요 👇</p>
 <a href="{{affiliateUrl}}" target="_blank" rel="nofollow sponsored" class="cpr-cta-large">
@@ -171,7 +249,7 @@ jsonLd:
 </a>
 </div>
 
-<!-- ⑩ 파트너스 고지 -->
+<!-- ⑬ 파트너스 고지 -->
 <div class="cpr-notice">
 <small>※ 이 포스팅은 쿠팡 파트너스 활동의 일환으로, 이에 따른 일정액의 수수료를 제공받습니다.</small>
 </div>

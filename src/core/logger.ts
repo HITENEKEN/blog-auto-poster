@@ -1,6 +1,7 @@
-import pino, { Logger, LoggerOptions, DestinationStream } from 'pino';
+import pino, { Logger, DestinationStream } from 'pino';
 import * as fs from 'fs';
 import * as path from 'path';
+import * as os from 'os';
 import { getConfigManager } from './config';
 
 let loggerInstance: Logger | null = null;
@@ -24,8 +25,9 @@ function initializeLogger(): void {
 
   const transports: DestinationStream[] = [
     {
+      // stdout sink; pino lines already end with '\n', console.log semantics preserved.
       write: (msg: string) => {
-        console.log(msg);
+        process.stdout.write(`${msg}\n`);
       },
     },
   ];
@@ -38,12 +40,6 @@ function initializeLogger(): void {
 
   transports.push(fileTransport);
 
-  const errorFileTransport = pino.destination({
-    dest: path.join(logDir, 'error.log'),
-    sync: false,
-    minLength: 0,
-  });
-
   loggerInstance = pino(
     {
       level: logLevel,
@@ -53,10 +49,10 @@ function initializeLogger(): void {
       timestamp: pino.stdTimeFunctions.isoTime,
       base: {
         pid: process.pid,
-        hostname: require('os').hostname(),
+        hostname: os.hostname(),
       },
     },
-    pino.multistream(transports)
+    pino.multistream(transports),
   );
 
   loggerInstance.info({ logLevel, logDir }, 'Logger initialized');

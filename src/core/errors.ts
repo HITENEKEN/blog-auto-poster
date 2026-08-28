@@ -11,7 +11,7 @@ export class BlogPosterError extends Error {
     statusCode: number = 500,
     isRetryable: boolean = false,
     details?: Record<string, unknown>,
-    cause?: Error
+    cause?: Error,
   ) {
     super(message);
     this.name = this.constructor.name;
@@ -50,7 +50,7 @@ export class PlatformError extends BlogPosterError {
     statusCode: number = 502,
     isRetryable: boolean = true,
     details?: Record<string, unknown>,
-    cause?: Error
+    cause?: Error,
   ) {
     super(message, code, statusCode, isRetryable, details, cause);
     this.platform = platform;
@@ -69,7 +69,7 @@ export class AffiliateError extends BlogPosterError {
     statusCode: number = 502,
     isRetryable: boolean = true,
     details?: Record<string, unknown>,
-    cause?: Error
+    cause?: Error,
   ) {
     super(message, code, statusCode, isRetryable, details, cause);
     this.affiliate = affiliate;
@@ -88,7 +88,7 @@ export class TemplateError extends BlogPosterError {
     statusCode: number = 400,
     isRetryable: boolean = false,
     details?: Record<string, unknown>,
-    cause?: Error
+    cause?: Error,
   ) {
     super(message, code, statusCode, isRetryable, details, cause);
     this.templateName = templateName;
@@ -111,7 +111,7 @@ export class RateLimitError extends BlogPosterError {
     code: string = 'RATE_LIMIT_EXCEEDED',
     statusCode: number = 429,
     details?: Record<string, unknown>,
-    cause?: Error
+    cause?: Error,
   ) {
     super(message, code, statusCode, true, details, cause);
     this.retryAfter = retryAfter;
@@ -133,7 +133,7 @@ export class AuthenticationError extends BlogPosterError {
     code: string = 'AUTHENTICATION_FAILED',
     statusCode: number = 401,
     details?: Record<string, unknown>,
-    cause?: Error
+    cause?: Error,
   ) {
     super(message, code, statusCode, false, details, cause);
     this.provider = provider;
@@ -154,7 +154,7 @@ export class ValidationError extends BlogPosterError {
     constraints: string[],
     code: string = 'VALIDATION_ERROR',
     statusCode: number = 400,
-    details?: Record<string, unknown>
+    details?: Record<string, unknown>,
   ) {
     super(message, code, statusCode, false, details);
     this.field = field;
@@ -173,7 +173,7 @@ export class ConfigurationError extends BlogPosterError {
     code: string = 'CONFIGURATION_ERROR',
     statusCode: number = 500,
     details?: Record<string, unknown>,
-    cause?: Error
+    cause?: Error,
   ) {
     super(message, code, statusCode, false, details, cause);
     this.configKey = configKey;
@@ -189,7 +189,7 @@ export class NotFoundError extends BlogPosterError {
     resource: string,
     identifier: string,
     code: string = 'NOT_FOUND',
-    details?: Record<string, unknown>
+    details?: Record<string, unknown>,
   ) {
     super(`${resource} not found: ${identifier}`, code, 404, false, details);
     this.resource = resource;
@@ -208,9 +208,16 @@ export class TimeoutError extends BlogPosterError {
     code: string = 'TIMEOUT',
     statusCode: number = 504,
     details?: Record<string, unknown>,
-    cause?: Error
+    cause?: Error,
   ) {
-    super(`Operation timed out: ${operation} (${timeoutMs}ms)`, code, statusCode, true, details, cause);
+    super(
+      `Operation timed out: ${operation} (${timeoutMs}ms)`,
+      code,
+      statusCode,
+      true,
+      details,
+      cause,
+    );
     this.operation = operation;
     this.timeoutMs = timeoutMs;
     this.name = 'TimeoutError';
@@ -228,14 +235,14 @@ export class QuotaExceededError extends BlogPosterError {
     resetAt?: Date,
     code: string = 'QUOTA_EXCEEDED',
     statusCode: number = 429,
-    details?: Record<string, unknown>
+    details?: Record<string, unknown>,
   ) {
     super(
       `Quota exceeded for ${provider}: ${quotaType}${resetAt ? `, resets at ${resetAt.toISOString()}` : ''}`,
       code,
       statusCode,
       true,
-      details
+      details,
     );
     this.provider = provider;
     this.quotaType = quotaType;

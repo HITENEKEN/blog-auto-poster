@@ -9,22 +9,25 @@
 ## 구현 결과
 
 ### 신규 파일
-| 파일 | 설명 |
-|------|------|
+
+| 파일                                      | 설명                                                     |
+| ----------------------------------------- | -------------------------------------------------------- |
 | `src/intelligence/NaverApiHubProvider.ts` | `NaverApiHubKeywordProvider` + `NaverApiHubBlogAnalyzer` |
-| `scripts/path-alias.js` | 런타임 `@core/*` path alias resolver |
+| `scripts/path-alias.js`                   | 런타임 `@core/*` path alias resolver                     |
 
 ### 수정된 파일
-| 파일 | 변경 내용 |
-|------|-----------|
-| `config/secrets.yaml` | YAML 형식으로 NCP API 키 설정 |
-| `src/core/interfaces.ts` | `KeywordProviderConfig.useApiHub` 플래그 추가 |
-| `src/core/config.ts` | `NAVER_API_HUB` 환경변수 오버라이드 추가 |
-| `src/intelligence/index.ts` | `NaverApiHubProvider` export 추가 |
-| `src/cli/index.ts` | research 명령을 API Hub로 교체 (기존 stub 제거) |
-| `package.json` | scripts에 path-alias resolver 등록 |
+
+| 파일                        | 변경 내용                                       |
+| --------------------------- | ----------------------------------------------- |
+| `config/secrets.yaml`       | YAML 형식으로 NCP API 키 설정                   |
+| `src/core/interfaces.ts`    | `KeywordProviderConfig.useApiHub` 플래그 추가   |
+| `src/core/config.ts`        | `NAVER_API_HUB` 환경변수 오버라이드 추가        |
+| `src/intelligence/index.ts` | `NaverApiHubProvider` export 추가               |
+| `src/cli/index.ts`          | research 명령을 API Hub로 교체 (기존 stub 제거) |
+| `package.json`              | scripts에 path-alias resolver 등록              |
 
 ### 기존 코드 유지
+
 기존 `NaverKeywordProvider`(DataLab 방식)와 `NaverBlogAnalyzer`(openapi.naver.com 방식)는 삭제하지 않고 유지합니다. 향후 다른 프로젝트에서 재사용 가능합니다.
 
 ---
@@ -95,9 +98,9 @@ $ npm run cli -- research "무선청소기" --limit=5
 keywordProviders:
   naver-api-hub:
     enabled: true
-    apiKey: "m8gv2ia7pq"                    # X-NCP-APIGW-API-KEY-ID
-    apiSecret: "1AeVlPZgo..."               # X-NCP-APIGW-API-KEY
-    baseUrl: "https://naverapihub.apigw.ntruss.com/search/v1"
+    apiKey: 'm8gv2ia7pq' # X-NCP-APIGW-API-KEY-ID
+    apiSecret: '1AeVlPZgo...' # X-NCP-APIGW-API-KEY
+    baseUrl: 'https://naverapihub.apigw.ntruss.com/search/v1'
     useApiHub: true
 ```
 
@@ -108,6 +111,7 @@ keywordProviders:
 `12-dashboard-keywords-template-plan.md` 참조.
 
 **완료된 항목:**
+
 - [x] 파트너스 최적화 템플릿 3종 (`coupang-partner-review.hbs`, `coupang-comparison-guide.hbs`, `coupang-buying-guide.hbs`)
 - [x] 템플릿 CRUD API (`/api/templates/*`)
 - [x] 키워드 trending/research API (`/api/keywords/trending`, `/api/keywords/:keyword/blogs`)

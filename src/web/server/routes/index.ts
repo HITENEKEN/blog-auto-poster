@@ -1,54 +1,174 @@
-// @ts-nocheck
 import { FastifyInstance } from 'fastify';
 import { getLogger } from '@core/logger';
-import { ConfigManager, AffiliateRegistry, PlatformAdapter, JobQueue, CronScheduler } from '@core/interfaces';
+import { getCache } from '@core/cache';
+import {
+  ConfigManager,
+  KeywordData,
+  PlatformCredentials,
+  PlatformCategory,
+  SchedulerConfig,
+} from '@core/interfaces';
+import type { AffiliateRegistry } from '@affiliates/registry';
+import type { CronScheduler } from '@scheduler/CronScheduler';
+import type { JobQueueImpl, PublishedPostRow } from '@scheduler/JobQueue';
+import type { PlatformRegistry } from '@platforms/registry';
+import type { BlogInfo } from '../../shared/types';
+import { createTemplateEngine } from '@content/TemplateEngine';
+import { createImageGenerator } from '@content/ImageGenerator';
+import { createPostAssembler } from '@content/PostAssembler';
 import * as fs from 'fs';
 import * as path from 'path';
+import * as yaml from 'js-yaml';
 
 const logger = getLogger('api-routes');
+
+// Recursively mask secret-like string fields (password, secret, token, apiKey, etc.) to '***'.
+const SECRET_KEY_RE = /password|secret|token|apikey/i;
+function maskSecrets(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(maskSecrets);
+  if (value && typeof value === 'object') {
+    const out: Record<string, unknown> = {};
+    for (const key of Object.keys(value)) {
+      const v = (value as Record<string, unknown>)[key];
+      if (typeof v === 'string' && SECRET_KEY_RE.test(key) && v) {
+        out[key] = '***';
+      } else if (v && typeof v === 'object') {
+        out[key] = maskSecrets(v);
+      } else {
+        out[key] = v;
+      }
+    }
+    return out;
+  }
+  return value;
+}
+
+// One platform attempt inside the publish response (superset of shared PublishResult:
+// early-failure entries carry no `success` field, matching the historical payload).
+type PublishAttempt = {
+  platform: string;
+  postId?: string;
+  url?: string;
+  error?: string;
+  success?: boolean;
+  [key: string]: unknown;
+};
+
+// Frontmatter fields consumed by the templates API (YAML is user-authored, all optional).
+interface TemplateFrontmatter {
+  name?: string;
+  platforms?: string[];
+  requiredFields?: string[];
+  optionalFields?: string[];
+  seo?: { titleTemplate?: string; [key: string]: unknown };
+}
 
 export interface RouteContext {
   configManager: ConfigManager;
   affiliateRegistry: AffiliateRegistry;
-  platformRegistry: Map<string, PlatformAdapter>;
-  jobQueue: JobQueue;
+  platformRegistry: PlatformRegistry;
+  jobQueue: JobQueueImpl;
   scheduler: CronScheduler;
 }
 
 export async function registerRoutes(app: FastifyInstance, context: RouteContext): Promise<void> {
   const { configManager, affiliateRegistry, platformRegistry, jobQueue, scheduler } = context;
 
+  // Credential validation hits external APIs; cache results so 30-60s dashboard
+  // polling doesn't burn provider quotas on every request.
+  type DashboardValidation = {
+    affiliates: Record<string, boolean>;
+    platforms: Record<string, boolean>;
+  };
+  type KeywordRow = {
+    keyword: string;
+    volume: number;
+    competition: number;
+    related?: string[];
+  };
+  const dashboardValidationCache = getCache<DashboardValidation>('dashboard-stats-validation');
+
+  // ---- Settings backend (GET/PUT config) ----
+  app.get('/api/config', async () => {
+    return { config: maskSecrets(configManager.getAll()) };
+  });
+
+  app.put('/api/config', async (request) => {
+    const body = (request.body || {}) as Record<string, unknown>;
+
+    // Deep-merge (skipping '***' sentinels so masked secret fields aren't overwritten), then persist.
+    configManager.mergeConfig(body);
+
+    try {
+      await configManager.save();
+    } catch (error) {
+      logger.error({ error: String(error) }, 'Failed to persist config');
+      return { success: false, error: String(error) };
+    }
+
+    // Apply platform changes without a restart where possible.
+    const platforms = (body.platforms || {}) as Record<string, PlatformCredentials>;
+    for (const [name, cfg] of Object.entries(platforms)) {
+      if (cfg && cfg.enabled) {
+        try {
+          await platformRegistry.initialize(name, cfg);
+        } catch (error) {
+          logger.warn(
+            { platform: name, error: String(error) },
+            'Failed to initialize platform after config save',
+          );
+        }
+      }
+    }
+
+    return { success: true };
+  });
+
   // Dashboard stats
   app.get('/api/dashboard/stats', async () => {
     const jobStats = jobQueue.getStats();
     const publishedPosts = jobQueue.getPublishedPosts({ limit: 1000 });
-    const affiliateStatus = await affiliateRegistry.validateAll();
-    const platformStatus: Record<string, boolean> = {};
-
-    for (const [name, adapter] of platformRegistry) {
-      try {
-        platformStatus[name] = await adapter.validateCredentials();
-      } catch {
-        platformStatus[name] = false;
+    // 60s in-memory cache: polling must not re-validate external credentials.
+    const cachedValidation = dashboardValidationCache.get('v1');
+    let affiliateStatus: Record<string, boolean>;
+    let platformStatus: Record<string, boolean>;
+    if (cachedValidation) {
+      affiliateStatus = cachedValidation.affiliates;
+      platformStatus = cachedValidation.platforms;
+    } else {
+      affiliateStatus = await affiliateRegistry.validateAll();
+      platformStatus = {};
+      for (const [name, adapter] of platformRegistry.getInitializedAdapters()) {
+        try {
+          platformStatus[name] = await adapter.validateCredentials();
+        } catch {
+          platformStatus[name] = false;
+        }
       }
+      dashboardValidationCache.set(
+        'v1',
+        { affiliates: affiliateStatus, platforms: platformStatus },
+        60,
+      );
     }
 
     const today = new Date();
     today.setHours(0, 0, 0, 0);
-    const todayPosts = publishedPosts.filter(p => new Date(p.published_at) >= today);
+    const todayPosts = publishedPosts.filter((p) => new Date(p.published_at) >= today);
 
     return {
       totalPosts: publishedPosts.length,
       todayPosts: todayPosts.length,
-      publishedPosts: publishedPosts.filter(p => p.status === 'published').length,
-      failedPosts: publishedPosts.filter(p => p.status === 'failed').length,
-      successRate: publishedPosts.length > 0
-        ? publishedPosts.filter(p => p.status === 'published').length / publishedPosts.length
-        : 0,
+      publishedPosts: publishedPosts.filter((p) => p.status === 'published').length,
+      failedPosts: publishedPosts.filter((p) => p.status === 'failed').length,
+      successRate:
+        publishedPosts.length > 0
+          ? publishedPosts.filter((p) => p.status === 'published').length / publishedPosts.length
+          : 0,
       jobQueue: jobStats,
       affiliates: affiliateStatus,
       platforms: platformStatus,
-      recentPosts: publishedPosts.slice(0, 10).map(p => ({
+      recentPosts: publishedPosts.slice(0, 10).map((p) => ({
         id: p.id,
         title: p.title,
         platform: p.platform,
@@ -60,36 +180,49 @@ export async function registerRoutes(app: FastifyInstance, context: RouteContext
 
   // Blogs management
   app.get('/api/blogs', async () => {
-    const blogs: any[] = [];
+    const blogs: BlogInfo[] = [];
 
-    for (const [name, adapter] of platformRegistry) {
+    // Union of configured platforms and registered adapters so the tab populates
+    // as soon as a platform is configured, even before a restart re-initializes it.
+    const appConfig = configManager.getAll() as Record<string, Record<string, unknown>>;
+    const configured = Object.keys(appConfig.platforms || {});
+    const available = platformRegistry.getAvailableAdapters();
+    const names = Array.from(new Set([...configured, ...available]));
+
+    for (const name of names) {
       const config = configManager.getPlatformConfig(name);
-      let categories: any[] = [];
-      let lastPost: any = null;
+      let connected = false;
+      let categories: PlatformCategory[] = [];
+      let lastPost: PublishedPostRow | null = null;
+
+      const adapter = platformRegistry.hasAdapter(name) ? platformRegistry.getAdapter(name) : null;
 
       try {
-        categories = await adapter.getCategories();
+        if (adapter && config) {
+          connected = await adapter.validateCredentials().catch(() => false);
+          categories = await adapter.getCategories().catch(() => []);
+        }
         const posts = jobQueue.getPublishedPosts({ platform: name, limit: 1 });
         lastPost = posts[0] || null;
       } catch (error) {
         logger.warn({ platform: name, error: String(error) }, 'Failed to get blog info');
       }
 
-      const isValid = await adapter.validateCredentials().catch(() => false);
-
       blogs.push({
         name,
         platform: name,
-        connected: isValid,
-        categories: categories.map(c => ({ id: c.id, name: c.name })),
-        lastPost: lastPost ? {
-          id: lastPost.post_id,
-          title: lastPost.title,
-          url: lastPost.url,
-          publishedAt: lastPost.published_at,
-          status: lastPost.status,
-        } : null,
-        config: config ? { ...config, password: '***', appPassword: '***', apiKey: '***' } : null,
+        connected,
+        categories: categories.map((c) => ({ id: c.id, name: c.name })),
+        lastPost: lastPost
+          ? {
+              id: lastPost.post_id,
+              title: lastPost.title as string,
+              url: lastPost.url,
+              publishedAt: lastPost.published_at,
+              status: lastPost.status,
+            }
+          : null,
+        config: config ? (maskSecrets(config) as Record<string, unknown>) : null,
       });
     }
 
@@ -98,7 +231,12 @@ export async function registerRoutes(app: FastifyInstance, context: RouteContext
 
   app.post('/api/blogs/:name/sync-categories', async (request) => {
     const { name } = request.params as { name: string };
-    const adapter = platformRegistry.get(name);
+
+    if (!platformRegistry.hasAdapter(name)) {
+      return { error: 'Platform not found' };
+    }
+
+    const adapter = platformRegistry.getAdapter(name);
 
     if (!adapter) {
       return { error: 'Platform not found' };
@@ -140,18 +278,31 @@ export async function registerRoutes(app: FastifyInstance, context: RouteContext
 
   // Keywords - Naver API Hub
   app.get('/api/keywords/trending', async (request) => {
-    const { q, limit = '20' } = request.query as any;
+    const { q, limit = '20' } = request.query as { q?: string; limit?: string };
 
     if (!q || !q.trim()) {
-      return { trending: [], totalResults: 0, searchedAt: new Date().toISOString(), source: 'naver-api-hub', error: 'Query required' };
+      return {
+        trending: [],
+        totalResults: 0,
+        searchedAt: new Date().toISOString(),
+        source: 'naver-api-hub',
+        error: 'Query required',
+      };
     }
 
     const hubConfig = configManager.getKeywordProviderConfig('naver-api-hub');
     if (!hubConfig?.apiKey || !hubConfig?.apiSecret) {
-      return { trending: [], totalResults: 0, searchedAt: new Date().toISOString(), source: 'naver-api-hub', error: 'Naver API Hub credentials not configured' };
+      return {
+        trending: [],
+        totalResults: 0,
+        searchedAt: new Date().toISOString(),
+        source: 'naver-api-hub',
+        error: 'Naver API Hub credentials not configured',
+      };
     }
 
-    const { NaverApiHubKeywordProvider } = await import('../../../intelligence/NaverApiHubProvider.js');
+    const { NaverApiHubKeywordProvider } =
+      await import('../../../intelligence/NaverApiHubProvider.js');
     const provider = new NaverApiHubKeywordProvider(hubConfig);
 
     try {
@@ -161,7 +312,7 @@ export async function registerRoutes(app: FastifyInstance, context: RouteContext
       return {
         trending: results,
         totalResults: blogData.total || 0,
-        blogs: (blogData.items || []).slice(0, 10).map((item: any) => ({
+        blogs: (blogData.items || []).slice(0, 10).map((item) => ({
           title: item.title?.replace(/<[^>]*>/g, '') || '',
           link: item.link,
           bloggername: item.bloggername,
@@ -173,26 +324,120 @@ export async function registerRoutes(app: FastifyInstance, context: RouteContext
       };
     } catch (error) {
       logger.error({ error: String(error), query: q }, 'Trending keywords search failed');
-      return { trending: [], totalResults: 0, blogs: [], searchedAt: new Date().toISOString(), source: 'naver-api-hub', error: String(error) };
+      return {
+        trending: [],
+        totalResults: 0,
+        blogs: [],
+        searchedAt: new Date().toISOString(),
+        source: 'naver-api-hub',
+        error: String(error),
+      };
+    }
+  });
+
+  // Keywords - Top 20 (query-less feed aggregated from seed keywords via Naver API Hub)
+  app.get('/api/keywords/top', async (request) => {
+    const { seeds, limit = '20' } = request.query as { seeds?: string; limit?: string };
+    const topLimit = parseInt(limit) || 20;
+
+    let seedList: string[] = [];
+    if (typeof seeds === 'string' && seeds.trim()) {
+      seedList = seeds
+        .split(',')
+        .map((s: string) => s.trim())
+        .filter(Boolean);
+    } else {
+      seedList = (configManager.get('keywords.topSeeds', []) as string[]) || [];
+    }
+
+    if (seedList.length === 0) {
+      return { keywords: [], source: 'naver-api-hub', error: 'No seed keywords configured' };
+    }
+    const hubConfig = configManager.getKeywordProviderConfig('naver-api-hub');
+    if (!hubConfig?.apiKey || !hubConfig?.apiSecret) {
+      return {
+        keywords: [],
+        source: 'naver-api-hub',
+        error: 'Naver API Hub credentials not configured',
+      };
+    }
+
+    const { NaverApiHubKeywordProvider } =
+      await import('../../../intelligence/NaverApiHubProvider.js');
+    const provider = new NaverApiHubKeywordProvider(hubConfig);
+
+    try {
+      const seen = new Set<string>();
+      const all: KeywordRow[] = [];
+
+      // Stage 1: research each seed (24h-cached inside the provider).
+      // Collect related keywords from blog-search titles — no extra API calls.
+      const candidateSet = new Set<string>();
+      for (const seed of seedList) {
+        const results = await provider.research([seed], { limit: topLimit });
+        for (const r of results) {
+          if (r.keyword && !seen.has(r.keyword)) {
+            seen.add(r.keyword);
+            all.push(r);
+          }
+          for (const rel of r.related || []) {
+            if (rel && rel !== seed) candidateSet.add(rel);
+          }
+        }
+      }
+
+      // Stage 2: research related candidates (cap 40) in batches of 5;
+      // individual failures are logged and skipped.
+      const candidates = [...candidateSet].slice(0, 40);
+      for (let i = 0; i < candidates.length; i += 5) {
+        const batch = candidates.slice(i, i + 5);
+        const rows = await Promise.all(
+          batch.map(async (kw) => {
+            try {
+              const res = await provider.research([kw], { limit: topLimit });
+              return res[0] || null;
+            } catch (error) {
+              logger.error(
+                { keyword: kw, error: String(error) },
+                'Candidate keyword research failed',
+              );
+              return null;
+            }
+          }),
+        );
+        for (const row of rows) {
+          if (row?.keyword && !seen.has(row.keyword)) {
+            seen.add(row.keyword);
+            all.push(row);
+          }
+        }
+      }
+
+      all.sort((a, b) => b.volume * (1 - b.competition) - a.volume * (1 - a.competition));
+      return { keywords: all.slice(0, topLimit), source: 'naver-api-hub', estimated: true };
+    } catch (error) {
+      logger.error({ error: String(error) }, 'Top keywords aggregation failed');
+      return { keywords: [], source: 'naver-api-hub', error: String(error) };
     }
   });
 
   app.get('/api/keywords/:keyword/blogs', async (request) => {
-    const { keyword } = request.params as any;
-    const { limit = '10', sort = 'sim' } = request.query as any;
+    const { keyword } = request.params as { keyword: string };
+    const { limit = '10', sort = 'sim' } = request.query as { limit?: string; sort?: string };
 
     const hubConfig = configManager.getKeywordProviderConfig('naver-api-hub');
     if (!hubConfig?.apiKey || !hubConfig?.apiSecret) {
       return { error: 'Naver API Hub credentials not configured', blogs: [] };
     }
 
-    const { NaverApiHubKeywordProvider } = await import('../../../intelligence/NaverApiHubProvider.js');
+    const { NaverApiHubKeywordProvider } =
+      await import('../../../intelligence/NaverApiHubProvider.js');
     const provider = new NaverApiHubKeywordProvider(hubConfig);
 
     try {
       const blogData = await provider.searchBlog(keyword, parseInt(limit), sort);
       return {
-        blogs: (blogData.items || []).map((item: any) => ({
+        blogs: (blogData.items || []).map((item) => ({
           title: item.title?.replace(/<[^>]*>/g, '') || '',
           link: item.link,
           bloggername: item.bloggername,
@@ -208,19 +453,28 @@ export async function registerRoutes(app: FastifyInstance, context: RouteContext
   });
 
   app.post('/api/keywords/research', async (request) => {
-    const { keywords, providers = ['naver-api-hub'], limit = 20 } = request.body as any;
+    const {
+      keywords,
+      providers = ['naver-api-hub'],
+      limit = 20,
+    } = request.body as {
+      keywords?: string[];
+      providers?: string[];
+      limit?: number;
+    };
 
     if (!keywords || !Array.isArray(keywords) || keywords.length === 0) {
       return { error: 'Keywords array required' };
     }
 
-    const allResults: any[] = [];
+    const allResults: KeywordData[] = [];
 
     // Naver API Hub
     if (providers.includes('naver-api-hub')) {
       const hubConfig = configManager.getKeywordProviderConfig('naver-api-hub');
       if (hubConfig?.apiKey && hubConfig?.apiSecret) {
-        const { NaverApiHubKeywordProvider } = await import('../../../intelligence/NaverApiHubProvider.js');
+        const { NaverApiHubKeywordProvider } =
+          await import('../../../intelligence/NaverApiHubProvider.js');
         const provider = new NaverApiHubKeywordProvider(hubConfig);
         const hubResults = await provider.research(keywords, { limit });
         allResults.push(...hubResults);
@@ -228,8 +482,14 @@ export async function registerRoutes(app: FastifyInstance, context: RouteContext
     }
 
     // Legacy providers (DataLab, Google Trends, Coupang)
-    if (providers.includes('naver') || providers.includes('google-trends') || providers.includes('coupang')) {
-      const researcher = await import('../../../intelligence/KeywordResearcher.js').then(m => m.createKeywordResearcher());
+    if (
+      providers.includes('naver') ||
+      providers.includes('google-trends') ||
+      providers.includes('coupang')
+    ) {
+      const researcher = await import('../../../intelligence/KeywordResearcher.js').then((m) =>
+        m.createKeywordResearcher(),
+      );
       const { NaverKeywordProvider, GoogleTrendsProvider, CoupangKeywordProvider } =
         await import('../../../intelligence/KeywordResearcher.js');
 
@@ -237,7 +497,8 @@ export async function registerRoutes(app: FastifyInstance, context: RouteContext
       const googleConfig = configManager.getKeywordProviderConfig('google-trends');
 
       if (naverConfig?.enabled) researcher.registerProvider(new NaverKeywordProvider(naverConfig));
-      if (googleConfig?.enabled) researcher.registerProvider(new GoogleTrendsProvider(googleConfig));
+      if (googleConfig?.enabled)
+        researcher.registerProvider(new GoogleTrendsProvider(googleConfig));
       researcher.registerProvider(new CoupangKeywordProvider());
 
       const legacyProviders = providers.filter((p: string) => p !== 'naver-api-hub');
@@ -248,13 +509,27 @@ export async function registerRoutes(app: FastifyInstance, context: RouteContext
     }
 
     // Sort by volume * (1-competition)
-    allResults.sort((a, b) => (b.volume * (1 - b.competition)) - (a.volume * (1 - a.competition)));
+    allResults.sort((a, b) => b.volume * (1 - b.competition) - a.volume * (1 - a.competition));
 
     return { keywords: allResults.slice(0, limit), providers };
   });
   // Posts management
   app.get('/api/posts', async (request) => {
-    const { status, platform, template, limit = '50', offset = '0', fromDate, toDate } = request.query as any;
+    const {
+      status,
+      platform,
+      limit = '50',
+      offset = '0',
+      fromDate,
+      toDate,
+    } = request.query as {
+      status?: string;
+      platform?: string;
+      limit?: string;
+      offset?: string;
+      fromDate?: string;
+      toDate?: string;
+    };
 
     const posts = jobQueue.getPublishedPosts({
       status,
@@ -267,7 +542,7 @@ export async function registerRoutes(app: FastifyInstance, context: RouteContext
     const total = jobQueue.getPublishedPosts({ status, platform, fromDate, toDate }).length;
 
     return {
-      posts: posts.map(p => ({
+      posts: posts.map((p) => ({
         id: p.id,
         jobId: p.job_id,
         platform: p.platform,
@@ -287,7 +562,12 @@ export async function registerRoutes(app: FastifyInstance, context: RouteContext
   });
 
   app.post('/api/posts', async (request) => {
-    const { template, productId, platform, subId } = request.body as any;
+    const { template, productId, platform, subId } = request.body as {
+      template?: string;
+      productId?: string;
+      platform?: string;
+      subId?: string;
+    };
 
     if (!template || !productId || !platform) {
       return { error: 'template, productId, and platform are required' };
@@ -299,10 +579,6 @@ export async function registerRoutes(app: FastifyInstance, context: RouteContext
     }
 
     const product = await coupangAdapter.getProductDetails(productId);
-
-    const { createTemplateEngine } = await import('@content/TemplateEngine');
-    const { createImageGenerator } = await import('@content/ImageGenerator');
-    const { createPostAssembler } = await import('@content/PostAssembler');
 
     const templateEngine = createTemplateEngine('./templates');
     await templateEngine.loadTemplates();
@@ -325,7 +601,10 @@ export async function registerRoutes(app: FastifyInstance, context: RouteContext
     fs.mkdirSync(outputDir, { recursive: true });
     fs.writeFileSync(path.join(outputDir, 'post.html'), post.content);
     fs.writeFileSync(path.join(outputDir, 'meta.json'), JSON.stringify(post.meta, null, 2));
-    fs.writeFileSync(path.join(outputDir, 'platform-content.json'), JSON.stringify(post.platformContent, null, 2));
+    fs.writeFileSync(
+      path.join(outputDir, 'platform-content.json'),
+      JSON.stringify(post.platformContent, null, 2),
+    );
 
     return { post };
   });
@@ -346,10 +625,10 @@ export async function registerRoutes(app: FastifyInstance, context: RouteContext
 
     const targetPlatforms = platform ? [platform] : Object.keys(postMeta.platformContent || {});
 
-    const results: any[] = [];
+    const results: PublishAttempt[] = [];
 
     for (const platformName of targetPlatforms) {
-      const adapter = platformRegistry.get(platformName);
+      const adapter = platformRegistry.getAdapter(platformName);
       if (!adapter) {
         results.push({ platform: platformName, error: 'Platform adapter not found' });
         continue;
@@ -401,14 +680,16 @@ export async function registerRoutes(app: FastifyInstance, context: RouteContext
   // Scheduler
   app.get('/api/scheduler/jobs', async () => {
     const jobs = scheduler.getScheduledJobs();
-    return { jobs: jobs.map(j => ({
-      name: j.name,
-      type: j.config.type,
-      cron: j.config.cron,
-      enabled: j.config.enabled,
-      priority: j.config.priority,
-      config: j.config.config,
-    })) };
+    return {
+      jobs: jobs.map((j) => ({
+        name: j.name,
+        type: j.config.type,
+        cron: j.config.cron,
+        enabled: j.config.enabled,
+        priority: j.config.priority,
+        config: j.config.config,
+      })),
+    };
   });
 
   app.post('/api/scheduler/jobs/:id/trigger', async (request) => {
@@ -418,11 +699,13 @@ export async function registerRoutes(app: FastifyInstance, context: RouteContext
   });
 
   app.put('/api/scheduler/config', async (request) => {
-    const updates = request.body as any;
+    const updates = request.body as Partial<SchedulerConfig>;
     scheduler.updateConfig(updates);
 
     // Persist to config
-    const currentConfig = configManager.getAll().scheduler || { enabled: false, jobs: [] };
+    const currentConfig =
+      (configManager.getAll().scheduler as Partial<SchedulerConfig> | undefined) ||
+      ({ enabled: false, jobs: [] } as Partial<SchedulerConfig>);
     const newConfig = { ...currentConfig, ...updates };
     configManager.set('scheduler', newConfig);
 
@@ -431,7 +714,7 @@ export async function registerRoutes(app: FastifyInstance, context: RouteContext
 
   // Analytics
   app.get('/api/analytics', async (request) => {
-    const { days = '30', platform } = request.query as any;
+    const { days = '30', platform } = request.query as { days?: string; platform?: string };
     const daysNum = parseInt(days);
     const fromDate = new Date(Date.now() - daysNum * 24 * 60 * 60 * 1000).toISOString();
 
@@ -468,30 +751,29 @@ export async function registerRoutes(app: FastifyInstance, context: RouteContext
       byDay: Object.entries(byDay).map(([date, data]) => ({ date, ...data })),
       byPlatform,
       byTemplate,
-      successRate: posts.length > 0
-        ? posts.filter(p => p.status === 'published').length / posts.length
-        : 0,
+      successRate:
+        posts.length > 0 ? posts.filter((p) => p.status === 'published').length / posts.length : 0,
     };
   });
 
-
   // Templates CRUD
   const templatesDir = path.resolve(process.cwd(), 'templates');
-  const yaml = require('js-yaml') as typeof import('js-yaml');
 
-  const parseTemplateFile = (content: string, filename: string) => {
+  const parseTemplateFile = (content: string, _filename: string) => {
     const fmMatch = content.match(/^---\n([\s\S]*?)\n---\n([\s\S]*)$/);
     if (!fmMatch) return null;
     try {
-      const frontmatter = yaml.load(fmMatch[1]) as any;
+      const frontmatter = yaml.load(fmMatch[1]) as TemplateFrontmatter;
       return { frontmatter, body: fmMatch[2], raw: content };
-    } catch { return null; }
+    } catch {
+      return null;
+    }
   };
 
   app.get('/api/templates', async () => {
     if (!fs.existsSync(templatesDir)) return { templates: [] };
-    const files = fs.readdirSync(templatesDir).filter(f => f.endsWith('.hbs'));
-    const templates = files.map(filename => {
+    const files = fs.readdirSync(templatesDir).filter((f) => f.endsWith('.hbs'));
+    const templates = files.map((filename) => {
       const content = fs.readFileSync(path.join(templatesDir, filename), 'utf-8');
       const parsed = parseTemplateFile(content, filename);
       if (!parsed) return { filename, name: filename.replace('.hbs', ''), error: 'parse failed' };
@@ -508,16 +790,21 @@ export async function registerRoutes(app: FastifyInstance, context: RouteContext
   });
 
   app.get('/api/templates/:name', async (request) => {
-    const { name } = request.params as any;
+    const { name } = request.params as { name: string };
     const filepath = path.join(templatesDir, `${name}.hbs`);
     if (!fs.existsSync(filepath)) return { error: 'Template not found' };
     const content = fs.readFileSync(filepath, 'utf-8');
     const parsed = parseTemplateFile(content, `${name}.hbs`);
-    return { name, content: parsed?.body || content, raw: content, frontmatter: parsed?.frontmatter || {} };
+    return {
+      name,
+      content: parsed?.body || content,
+      raw: content,
+      frontmatter: parsed?.frontmatter || {},
+    };
   });
 
   app.post('/api/templates', async (request) => {
-    const { name, content } = request.body as any;
+    const { name, content } = request.body as { name?: string; content?: string };
     if (!name || !content) return { error: 'name and content required' };
     const safeName = name.replace(/[^a-zA-Z0-9-_]/g, '');
     const filepath = path.join(templatesDir, `${safeName}.hbs`);
@@ -528,8 +815,8 @@ export async function registerRoutes(app: FastifyInstance, context: RouteContext
   });
 
   app.put('/api/templates/:name', async (request) => {
-    const { name } = request.params as any;
-    const { content } = request.body as any;
+    const { name } = request.params as { name: string };
+    const { content } = request.body as { content?: string };
     if (!content) return { error: 'content required' };
     const safeName = name.replace(/[^a-zA-Z0-9-_]/g, '');
     const filepath = path.join(templatesDir, `${safeName}.hbs`);
@@ -540,7 +827,7 @@ export async function registerRoutes(app: FastifyInstance, context: RouteContext
   });
 
   app.delete('/api/templates/:name', async (request) => {
-    const { name } = request.params as any;
+    const { name } = request.params as { name: string };
     const safeName = name.replace(/[^a-zA-Z0-9-_]/g, '');
     const filepath = path.join(templatesDir, `${safeName}.hbs`);
     if (!fs.existsSync(filepath)) return { error: 'Template not found' };
@@ -550,8 +837,8 @@ export async function registerRoutes(app: FastifyInstance, context: RouteContext
   });
 
   app.post('/api/templates/:name/preview', async (request) => {
-    const { name } = request.params as any;
-    const sampleData = (request.body as any)?.sampleData || {};
+    const { name } = request.params as { name: string };
+    const sampleData = (request.body as { sampleData?: Record<string, unknown> })?.sampleData || {};
     const filepath = path.join(templatesDir, `${name}.hbs`);
     if (!fs.existsSync(filepath)) return { error: 'Template not found' };
 
@@ -573,10 +860,11 @@ export async function registerRoutes(app: FastifyInstance, context: RouteContext
         categoryName: '가전제품',
         description: '강력한 흡입력과 가벼운 무게로 일상 청소를 혁신적으로 바꿔줍니다.',
         affiliateUrl: 'https://link.coupang.com/a/xxxxx',
-        oneLineReview: '가성비와 성능의 균형이 좋은 무선청소기로, 가벼운 무게 덕분에 청소가 한결 수월해집니다.',
+        oneLineReview:
+          '가성비와 성능의 균형이 좋은 무선청소기로, 가벼운 무게 덕분에 청소가 한결 수월해집니다.',
         pros: ['가볍고 조작이 쉬움', '흡입력 강함', '배터리 지속시간 김'],
         cons: ['먼지통 용량이 작음', '가격대가 높음'],
-        specs: { '무게': '1.2kg', '흡입력': '150W', '배터리': '60분', '먼지통': '0.3L' },
+        specs: { 무게: '1.2kg', 흡입력: '150W', 배터리: '60분', 먼지통: '0.3L' },
         targetAudience: ['1~2인 가구', '반려동물 있는 집', '층간소음 걱정되는 분'],
         faqList: [
           { question: '배터리는 교체 가능한가요?', answer: '네, 별도 구매하여 교체 가능합니다.' },
@@ -589,29 +877,107 @@ export async function registerRoutes(app: FastifyInstance, context: RouteContext
           ],
         },
         products: [
-          { name: '제품A', price: 189000, brand: '브랜드A', description: '프리미엄 모델', pros: ['성능'], cons: ['가격'], affiliateUrl: '#' },
-          { name: '제품B', price: 159000, brand: '브랜드B', description: '가성비 모델', pros: ['가격'], cons: ['무게'], affiliateUrl: '#' },
+          {
+            name: '제품A',
+            price: 189000,
+            brand: '브랜드A',
+            description: '프리미엄 모델',
+            pros: ['성능'],
+            cons: ['가격'],
+            affiliateUrl: '#',
+          },
+          {
+            name: '제품B',
+            price: 159000,
+            brand: '브랜드B',
+            description: '가성비 모델',
+            pros: ['가격'],
+            cons: ['무게'],
+            affiliateUrl: '#',
+          },
         ],
         productCount: 2,
         checklist: [
           { title: '사용 공간 확인', description: '청소할 면적에 맞는 배터리 시간을 선택하세요.' },
         ],
-        budgetSteps: [{ range: '20만원', productName: '보급형 모델', reason: '기본 기능 충족', affiliateUrl: '#' }],
-        topPick: { productName: '추천 제품', reason: '종합적으로 가장 균형잡힌 선택입니다.', affiliateUrl: '#' },
-        mistakesToAvoid: [{ title: '저렴한 것만 보지 않기', description: '내구성과 A/S까지 고려하세요.' }],
+        budgetSteps: [
+          {
+            range: '20만원',
+            productName: '보급형 모델',
+            reason: '기본 기능 충족',
+            affiliateUrl: '#',
+          },
+        ],
+        topPick: {
+          productName: '추천 제품',
+          reason: '종합적으로 가장 균형잡힌 선택입니다.',
+          affiliateUrl: '#',
+        },
+        mistakesToAvoid: [
+          { title: '저렴한 것만 보지 않기', description: '내구성과 A/S까지 고려하세요.' },
+        ],
+        // Phase 2: benchmark posts + LLM first-person experience fields so the
+        // rewritten template sections render in preview.
+        topPosts: [
+          {
+            title: '직접 써본 무선청소기 솔직 후기',
+            bloggername: '생활의발견',
+            link: 'https://blog.naver.com/example/1',
+            snippet: '한 달 매일 써본 결과 흡입력과 무게 밸런스가 생각보다 훨씬 좋아요.',
+          },
+          {
+            title: '무선청소기 고를 때 꼭 비교해야 할 5가지',
+            bloggername: '홈케어',
+            link: 'https://blog.naver.com/example/2',
+            snippet: '배터리, 무게, 소음, 머리 회전, A/S까지 체크하세요.',
+          },
+          {
+            title: '강아지 있는 집에 딱인 무선청소기',
+            bloggername: '댕댕이네',
+            link: 'https://blog.naver.com/example/3',
+            snippet: '털 빠짐 부위 청소가 한결 편해졌어요.',
+          },
+        ],
+        experienceIntro:
+          '저는 평소 청소기를 고를 때 스펙보다는 실사용감을 제일 중요하게 생각하는 편인데요, 이번에 직접 써보니 만족도가 꽤 높았습니다.',
+        realUsageStory:
+          '제가 직접 써보니 매일 20분씩 청소해도 배터리가 버텨서 좋더라고요. 솔직히 말씀드리면 처음엔 가벼움만 보고 샀는데, 흡입력까지 괜찮아서 깜짝 놀랐습니다.',
+        whyIChoseIt:
+          '저는 여러 모델을 비교하다가 A/S와 무게 밸런스 때문에 이 제품을 골랐어요. 가격이 조금 더 나가도 매일 쓰는 물건이니 충분히 값어치가 있다고 봅니다.',
+        conclusion:
+          '청소가 귀찮아서 안 사도 되겠다 생각했는데, 막상 써보니 일상이 한결 가벼워졌어요. 가벼운 무게와 흡입력이 중요한 분께 추천합니다.',
+        usageTips: [
+          '물걸질 전에 먼저 빨아들이면 패드 오염이 훨씬 줄어듭니다.',
+          '트리거는 잠금 모드를 활용해 손목 피로를 줄이세요.',
+          '먼지통은 2/3만 채워도 흡입력 저하가 적습니다.',
+          '침구 청소는 주 2회, 30분 이내로 끊어주면 배터리가 오래갑니다.',
+          '홀스 액세서리를 활용하면 틈새 청소가 쉬워집니다.',
+        ],
+        buyingChecklist: [
+          '사용 공간(면적)에 맞는 배터리 지속시간인지 확인하세요.',
+          '본체 무게와 손목 부담을 매장에서 직접 확인하세요.',
+          '먼지통 용량과 분리 세척 방식을 비교하세요.',
+          '필터 교체 주기와 소모품 가격을 확인하세요.',
+          'A/S 기간과 무상 수리 조건을 확인하세요.',
+        ],
         currentYear: new Date().getFullYear(),
       };
 
       const mergedData = { ...defaults, ...sampleData };
       // Register helpers
-      Handlebars.registerHelper('formatPrice', (p: number) => typeof p === 'number' ? p.toLocaleString('ko-KR') : String(p));
+      Handlebars.registerHelper('formatPrice', (p: number) =>
+        typeof p === 'number' ? p.toLocaleString('ko-KR') : String(p),
+      );
       Handlebars.registerHelper('renderStars', (r: number, max: number = 5) => {
-        const full = Math.floor(r); let s = '★'.repeat(full);
-        if (r - full >= .5) s += '☆';
-        s += '☆'.repeat(max - full - ((r - full >= .5) ? 1 : 0));
+        const full = Math.floor(r);
+        let s = '★'.repeat(full);
+        if (r - full >= 0.5) s += '☆';
+        s += '☆'.repeat(max - full - (r - full >= 0.5 ? 1 : 0));
         return s;
       });
-      Handlebars.registerHelper('math', (a: number, op: string, b: number) => op === '+' ? a + b : a);
+      Handlebars.registerHelper('math', (a: number, op: string, b: number) =>
+        op === '+' ? a + b : a,
+      );
 
       const compiled = Handlebars.compile(templateBody);
       const html = compiled(mergedData);
@@ -641,13 +1007,15 @@ export async function registerRoutes(app: FastifyInstance, context: RouteContext
       });
 
       // Send initial status
-      connection.socket.send(JSON.stringify({
-        type: 'status',
-        data: {
-          jobQueue: jobQueue.getStats(),
-          scheduler: scheduler.isRunning() ? 'running' : 'stopped',
-        },
-      }));
+      connection.socket.send(
+        JSON.stringify({
+          type: 'status',
+          data: {
+            jobQueue: jobQueue.getStats(),
+            scheduler: scheduler.isRunning() ? 'running' : 'stopped',
+          },
+        }),
+      );
     });
   });
 }

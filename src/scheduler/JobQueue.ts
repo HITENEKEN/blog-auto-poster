@@ -2,15 +2,8 @@ import Database from 'better-sqlite3';
 import * as path from 'path';
 import * as fs from 'fs';
 import { getLogger } from '@core/logger';
-import {
-  JobQueue,
-  Job,
-  JobType,
-  JobStatus,
-  JobFilters,
-  JobQueueStats,
-} from '@core/interfaces';
-import { ConfigurationError } from '@core/errors';
+import { JobQueue, Job, JobType, JobFilters, JobQueueStats } from '@core/interfaces';
+import { ConfigurationError, isRetryableError } from '@core/errors';
 
 const logger = getLogger('job-queue');
 
@@ -68,10 +61,73 @@ CREATE INDEX IF NOT EXISTS idx_published_posts_platform ON published_posts(platf
 CREATE INDEX IF NOT EXISTS idx_published_posts_published_at ON published_posts(published_at);
 `;
 
+/** Raw shape of a `jobs` table row as returned by better-sqlite3. */
+interface JobRow {
+  id: string;
+  type: string;
+  status: string;
+  priority: number;
+  payload: string;
+  result: string | null;
+  error: string | null;
+  attempts: number;
+  max_attempts: number;
+  scheduled_at: string | null;
+  started_at: string | null;
+  completed_at: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+/** Aggregated per-status counts from getStats(). SUM() yields null on empty tables. */
+interface JobStatsRow {
+  total: number;
+  pending: number | null;
+  queued: number | null;
+  running: number | null;
+  completed: number | null;
+  failed: number | null;
+  retrying: number | null;
+  dead_letter: number | null;
+}
+
+/** Raw shape of a `job_logs` table row. */
+interface JobLogRow {
+  level: string;
+  message: string;
+  metadata: string | null;
+  created_at: string;
+}
+
+/** Raw shape of a `published_posts` table row (metadata stays a JSON string). */
+export interface PublishedPostRow {
+  id: string;
+  job_id: string | null;
+  platform: string;
+  post_id: string;
+  url: string;
+  title: string | null;
+  template: string | null;
+  product_id: string | null;
+  affiliate_url: string | null;
+  status: string;
+  published_at: string;
+  metadata: string | null;
+  created_at: string;
+}
+
+/** Construction options for JobQueueImpl / createJobQueue. */
+export interface JobQueueOptions {
+  maxConcurrent?: number;
+  defaultRetryAttempts?: number;
+  defaultRetryDelayMs?: number;
+  deadLetterAfterAttempts?: number;
+}
+
 export class JobQueueImpl implements JobQueue {
   private db: Database.Database;
   private dbPath: string;
-  private processors = new Map<JobType, (job: Job) => Promise<any>>();
+  private processors = new Map<JobType, (job: Job) => Promise<unknown>>();
   private running = false;
   private maxConcurrent: number;
   private defaultRetryAttempts: number;
@@ -79,15 +135,7 @@ export class JobQueueImpl implements JobQueue {
   private deadLetterAfterAttempts: number;
   private concurrencySlots = 0;
 
-  constructor(
-    dbPath: string = './data/jobs.sqlite',
-    options: {
-      maxConcurrent?: number;
-      defaultRetryAttempts?: number;
-      defaultRetryDelayMs?: number;
-      deadLetterAfterAttempts?: number;
-    } = {}
-  ) {
+  constructor(dbPath: string = './data/jobs.sqlite', options: JobQueueOptions = {}) {
     this.dbPath = dbPath;
     this.maxConcurrent = options.maxConcurrent || 3;
     this.defaultRetryAttempts = options.defaultRetryAttempts || 3;
@@ -108,7 +156,7 @@ export class JobQueueImpl implements JobQueue {
     logger.info({ dbPath, maxConcurrent: this.maxConcurrent }, 'Job queue initialized');
   }
 
-  registerProcessor(type: JobType, processor: (job: Job) => Promise<any>): void {
+  registerProcessor(type: JobType, processor: (job: Job) => Promise<unknown>): void {
     this.processors.set(type, processor);
     logger.debug({ type }, 'Processor registered');
   }
@@ -131,14 +179,19 @@ export class JobQueueImpl implements JobQueue {
       job.maxAttempts || this.defaultRetryAttempts,
       job.scheduledAt || null,
       now,
-      now
+      now,
     );
 
-    logger.info({ jobId: id, type: job.type, status: job.scheduledAt ? 'PENDING' : 'QUEUED' }, 'Job enqueued');
+    logger.info(
+      { jobId: id, type: job.type, status: job.scheduledAt ? 'PENDING' : 'QUEUED' },
+      'Job enqueued',
+    );
     return id;
   }
 
-  async enqueueBatch(jobs: Omit<Job, 'id' | 'createdAt' | 'updatedAt' | 'attempts'>[]): Promise<string[]> {
+  async enqueueBatch(
+    jobs: Omit<Job, 'id' | 'createdAt' | 'updatedAt' | 'attempts'>[],
+  ): Promise<string[]> {
     const ids: string[] = [];
     const now = new Date().toISOString();
 
@@ -159,7 +212,7 @@ export class JobQueueImpl implements JobQueue {
           job.maxAttempts || this.defaultRetryAttempts,
           job.scheduledAt || null,
           now,
-          now
+          now,
         );
         ids.push(id);
       }
@@ -177,10 +230,10 @@ export class JobQueueImpl implements JobQueue {
 
     let query = `
       SELECT * FROM jobs
-      WHERE status = 'QUEUED'
+      WHERE status IN ('QUEUED', 'RETRYING')
       AND (scheduled_at IS NULL OR scheduled_at <= ?)
     `;
-    const params: any[] = [new Date().toISOString()];
+    const params: string[] = [new Date().toISOString()];
 
     if (types && types.length > 0) {
       query += ` AND type IN (${types.map(() => '?').join(',')})`;
@@ -190,7 +243,7 @@ export class JobQueueImpl implements JobQueue {
     query += ` ORDER BY priority DESC, created_at ASC LIMIT 1`;
 
     const stmt = this.db.prepare(query);
-    const row = stmt.get(...params) as any;
+    const row = stmt.get(...params) as JobRow | undefined;
 
     if (!row) return null;
 
@@ -210,7 +263,10 @@ export class JobQueueImpl implements JobQueue {
   async process(job: Job): Promise<void> {
     const processor = this.processors.get(job.type);
     if (!processor) {
-      throw new ConfigurationError(`No processor registered for job type: ${job.type}`, 'job_queue');
+      throw new ConfigurationError(
+        `No processor registered for job type: ${job.type}`,
+        'job_queue',
+      );
     }
 
     try {
@@ -220,10 +276,14 @@ export class JobQueueImpl implements JobQueue {
 
       // Mark completed
       const now = new Date().toISOString();
-      this.db.prepare(`
+      this.db
+        .prepare(
+          `
         UPDATE jobs SET status = 'COMPLETED', result = ?, completed_at = ?, updated_at = ?
         WHERE id = ?
-      `).run(JSON.stringify(result), now, now, job.id);
+      `,
+        )
+        .run(JSON.stringify(result), now, now, job.id);
 
       this.log(job.id, 'info', 'Job completed successfully', { result });
       logger.info({ jobId: job.id }, 'Job completed');
@@ -236,7 +296,9 @@ export class JobQueueImpl implements JobQueue {
 
   private async handleFailure(job: Job, error: unknown): Promise<void> {
     const errorMessage = error instanceof Error ? error.message : String(error);
-    const isRetryable = job.attempts < job.maxAttempts;
+    // Only retry errors marked retryable (network/timeout/transient); e.g.
+    // ConfigurationError fails immediately instead of burning attempts forever.
+    const isRetryable = isRetryableError(error) && job.attempts < job.maxAttempts;
 
     const now = new Date().toISOString();
 
@@ -245,28 +307,47 @@ export class JobQueueImpl implements JobQueue {
       const delay = this.defaultRetryDelayMs * Math.pow(2, job.attempts - 1);
       const retryAt = new Date(Date.now() + delay).toISOString();
 
-      this.db.prepare(`
+      this.db
+        .prepare(
+          `
         UPDATE jobs SET status = 'RETRYING', error = ?, scheduled_at = ?, updated_at = ?
         WHERE id = ?
-      `).run(errorMessage, retryAt, now, job.id);
+      `,
+        )
+        .run(errorMessage, retryAt, now, job.id);
 
-      this.log(job.id, 'warn', `Job failed, scheduling retry in ${delay}ms`, { error: errorMessage, attempt: job.attempts, nextRetry: retryAt });
+      this.log(job.id, 'warn', `Job failed, scheduling retry in ${delay}ms`, {
+        error: errorMessage,
+        attempt: job.attempts,
+        nextRetry: retryAt,
+      });
       logger.warn({ jobId: job.id, attempt: job.attempts, delay }, 'Job failed, retry scheduled');
     } else {
       // Check if should go to dead letter
       if (job.attempts >= this.deadLetterAfterAttempts) {
-        this.db.prepare(`
+        this.db
+          .prepare(
+            `
           UPDATE jobs SET status = 'DEAD_LETTER', error = ?, completed_at = ?, updated_at = ?
           WHERE id = ?
-        `).run(errorMessage, now, now, job.id);
+        `,
+          )
+          .run(errorMessage, now, now, job.id);
 
-        this.log(job.id, 'error', 'Job moved to dead letter queue', { error: errorMessage, attempts: job.attempts });
+        this.log(job.id, 'error', 'Job moved to dead letter queue', {
+          error: errorMessage,
+          attempts: job.attempts,
+        });
         logger.error({ jobId: job.id, attempts: job.attempts }, 'Job moved to dead letter');
       } else {
-        this.db.prepare(`
+        this.db
+          .prepare(
+            `
           UPDATE jobs SET status = 'FAILED', error = ?, completed_at = ?, updated_at = ?
           WHERE id = ?
-        `).run(errorMessage, now, now, job.id);
+        `,
+          )
+          .run(errorMessage, now, now, job.id);
 
         this.log(job.id, 'error', 'Job failed permanently', { error: errorMessage });
         logger.error({ jobId: job.id, error: errorMessage }, 'Job failed permanently');
@@ -281,10 +362,14 @@ export class JobQueueImpl implements JobQueue {
     }
 
     const now = new Date().toISOString();
-    this.db.prepare(`
+    this.db
+      .prepare(
+        `
       UPDATE jobs SET status = 'QUEUED', attempts = 0, error = NULL, scheduled_at = NULL, updated_at = ?
       WHERE id = ?
-    `).run(now, jobId);
+    `,
+      )
+      .run(now, jobId);
 
     this.log(jobId, 'info', 'Job manually retried');
     logger.info({ jobId }, 'Job manually retried');
@@ -293,15 +378,22 @@ export class JobQueueImpl implements JobQueue {
 
   async cancel(jobId: string): Promise<boolean> {
     const job = this.get(jobId);
-    if (!job || (job.status !== 'QUEUED' && job.status !== 'PENDING' && job.status !== 'RETRYING')) {
+    if (
+      !job ||
+      (job.status !== 'QUEUED' && job.status !== 'PENDING' && job.status !== 'RETRYING')
+    ) {
       return false;
     }
 
     const now = new Date().toISOString();
-    this.db.prepare(`
+    this.db
+      .prepare(
+        `
       UPDATE jobs SET status = 'FAILED', error = 'Cancelled by user', completed_at = ?, updated_at = ?
       WHERE id = ?
-    `).run(now, now, jobId);
+    `,
+      )
+      .run(now, now, jobId);
 
     this.log(jobId, 'info', 'Job cancelled by user');
     logger.info({ jobId }, 'Job cancelled');
@@ -309,7 +401,7 @@ export class JobQueueImpl implements JobQueue {
   }
   get(jobId: string): Job | null {
     const stmt = this.db.prepare('SELECT * FROM jobs WHERE id = ?');
-    const row = stmt.get(jobId) as any;
+    const row = stmt.get(jobId) as JobRow | undefined;
     return row ? this.rowToJob(row) : null;
   }
 
@@ -323,33 +415,45 @@ export class JobQueueImpl implements JobQueue {
 
   async complete(jobId: string, result?: Record<string, unknown>): Promise<void> {
     const now = new Date().toISOString();
-    this.db.prepare(`
+    this.db
+      .prepare(
+        `
       UPDATE jobs SET status = 'COMPLETED', result = ?, completed_at = ?, updated_at = ?
       WHERE id = ?
-    `).run(result ? JSON.stringify(result) : null, now, now, jobId);
+    `,
+      )
+      .run(result ? JSON.stringify(result) : null, now, now, jobId);
     this.log(jobId, 'info', 'Job completed', { result });
   }
 
   async fail(jobId: string, error: string): Promise<void> {
     const now = new Date().toISOString();
-    this.db.prepare(`
+    this.db
+      .prepare(
+        `
       UPDATE jobs SET status = 'FAILED', error = ?, completed_at = ?, updated_at = ?
       WHERE id = ?
-    `).run(error, now, now, jobId);
+    `,
+      )
+      .run(error, now, now, jobId);
     this.log(jobId, 'error', 'Job failed', { error });
   }
 
   async cleanup(olderThanDays: number): Promise<number> {
     const cutoffDate = new Date(Date.now() - olderThanDays * 24 * 60 * 60 * 1000).toISOString();
-    const result = this.db.prepare(`
+    const result = this.db
+      .prepare(
+        `
       DELETE FROM jobs WHERE created_at < ? AND status IN ('COMPLETED', 'FAILED', 'DEAD_LETTER')
-    `).run(cutoffDate);
+    `,
+      )
+      .run(cutoffDate);
     return result.changes;
   }
 
   getMany(filters: JobFilters = {}): Job[] {
     let query = 'SELECT * FROM jobs WHERE 1=1';
-    const params: any[] = [];
+    const params: (string | number)[] = [];
 
     if (filters.status) {
       query += ' AND status = ?';
@@ -367,6 +471,8 @@ export class JobQueueImpl implements JobQueue {
       query += ' AND created_at <= ?';
       params.push(filters.toDate);
     }
+    query += ' ORDER BY created_at DESC';
+
     if (filters.limit) {
       query += ' LIMIT ?';
       params.push(filters.limit);
@@ -376,15 +482,15 @@ export class JobQueueImpl implements JobQueue {
       params.push(filters.offset);
     }
 
-    query += ' ORDER BY created_at DESC';
-
     const stmt = this.db.prepare(query);
-    const rows = stmt.all(...params) as any[];
-    return rows.map(row => this.rowToJob(row));
+    const rows = stmt.all(...params) as JobRow[];
+    return rows.map((row) => this.rowToJob(row));
   }
 
   getStats(): JobQueueStats {
-    const stats = this.db.prepare(`
+    const stats = this.db
+      .prepare(
+        `
       SELECT
         COUNT(*) as total,
         SUM(CASE WHEN status = 'PENDING' THEN 1 ELSE 0 END) as pending,
@@ -395,13 +501,19 @@ export class JobQueueImpl implements JobQueue {
         SUM(CASE WHEN status = 'RETRYING' THEN 1 ELSE 0 END) as retrying,
         SUM(CASE WHEN status = 'DEAD_LETTER' THEN 1 ELSE 0 END) as dead_letter
       FROM jobs
-    `).get() as any;
+    `,
+      )
+      .get() as JobStatsRow;
 
-    const typeStats = this.db.prepare(`
+    const typeStats = this.db
+      .prepare(
+        `
       SELECT type, status, COUNT(*) as count
       FROM jobs
       GROUP BY type, status
-    `).all() as any[];
+    `,
+      )
+      .all() as Array<{ type: string; status: string; count: number }>;
 
     const byType: Record<string, Record<string, number>> = {};
     for (const row of typeStats) {
@@ -422,22 +534,45 @@ export class JobQueueImpl implements JobQueue {
     };
   }
 
-  async log(jobId: string, level: 'info' | 'warn' | 'error' | 'debug', message: string, metadata?: Record<string, unknown>): Promise<void> {
-    this.db.prepare(`
+  async log(
+    jobId: string,
+    level: 'info' | 'warn' | 'error' | 'debug',
+    message: string,
+    metadata?: Record<string, unknown>,
+  ): Promise<void> {
+    this.db
+      .prepare(
+        `
       INSERT INTO job_logs (job_id, level, message, metadata, created_at)
       VALUES (?, ?, ?, ?, ?)
-    `).run(jobId, level, message, metadata ? JSON.stringify(metadata) : null, new Date().toISOString());
+    `,
+      )
+      .run(
+        jobId,
+        level,
+        message,
+        metadata ? JSON.stringify(metadata) : null,
+        new Date().toISOString(),
+      );
   }
 
-  getLogs(jobId: string, limit: number = 100): Array<{ level: string; message: string; metadata?: Record<string, unknown>; createdAt: string }> {
+  getLogs(
+    jobId: string,
+    limit: number = 100,
+  ): Array<{
+    level: string;
+    message: string;
+    metadata?: Record<string, unknown>;
+    createdAt: string;
+  }> {
     const stmt = this.db.prepare(`
       SELECT level, message, metadata, created_at FROM job_logs
       WHERE job_id = ?
       ORDER BY created_at DESC
       LIMIT ?
     `);
-    const rows = stmt.all(jobId, limit) as any[];
-    return rows.map(row => ({
+    const rows = stmt.all(jobId, limit) as JobLogRow[];
+    return rows.map((row) => ({
       level: row.level,
       message: row.message,
       metadata: row.metadata ? JSON.parse(row.metadata) : undefined,
@@ -458,29 +593,42 @@ export class JobQueueImpl implements JobQueue {
     metadata?: Record<string, unknown>;
   }): void {
     const now = new Date().toISOString();
-    this.db.prepare(`
+    this.db
+      .prepare(
+        `
       INSERT OR REPLACE INTO published_posts (id, job_id, platform, post_id, url, title, template, product_id, affiliate_url, status, published_at, metadata, created_at)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `).run(
-      `pub-${post.platform}-${post.postId}`,
-      post.jobId || null,
-      post.platform,
-      post.postId,
-      post.url,
-      post.title || null,
-      post.template || null,
-      post.productId || null,
-      post.affiliateUrl || null,
-      post.status,
-      now,
-      post.metadata ? JSON.stringify(post.metadata) : null,
-      now
-    );
+    `,
+      )
+      .run(
+        `pub-${post.platform}-${post.postId}`,
+        post.jobId || null,
+        post.platform,
+        post.postId,
+        post.url,
+        post.title || null,
+        post.template || null,
+        post.productId || null,
+        post.affiliateUrl || null,
+        post.status,
+        now,
+        post.metadata ? JSON.stringify(post.metadata) : null,
+        now,
+      );
   }
 
-  getPublishedPosts(filters: { platform?: string; status?: string; fromDate?: string; toDate?: string; limit?: number } = {}): any[] {
+  getPublishedPosts(
+    filters: {
+      platform?: string;
+      status?: string;
+      affiliate?: string;
+      fromDate?: string;
+      toDate?: string;
+      limit?: number;
+    } = {},
+  ): PublishedPostRow[] {
     let query = 'SELECT * FROM published_posts WHERE 1=1';
-    const params: any[] = [];
+    const params: (string | number)[] = [];
 
     if (filters.platform) {
       query += ' AND platform = ?';
@@ -498,15 +646,16 @@ export class JobQueueImpl implements JobQueue {
       query += ' AND published_at <= ?';
       params.push(filters.toDate);
     }
+
+    query += ' ORDER BY published_at DESC';
+
     if (filters.limit) {
       query += ' LIMIT ?';
       params.push(filters.limit);
     }
 
-    query += ' ORDER BY published_at DESC';
-
     const stmt = this.db.prepare(query);
-    return stmt.all(...params) as any[];
+    return stmt.all(...params) as PublishedPostRow[];
   }
 
   close(): void {
@@ -514,26 +663,26 @@ export class JobQueueImpl implements JobQueue {
     logger.info('Job queue closed');
   }
 
-  private rowToJob(row: any): Job {
+  private rowToJob(row: JobRow): Job {
     return {
       id: row.id,
-      type: row.type,
-      status: row.status,
+      type: row.type as Job['type'],
+      status: row.status as Job['status'],
       priority: row.priority,
       payload: JSON.parse(row.payload),
       result: row.result ? JSON.parse(row.result) : undefined,
-      error: row.error,
+      error: row.error ?? undefined,
       attempts: row.attempts,
       maxAttempts: row.max_attempts,
-      scheduledAt: row.scheduled_at,
-      startedAt: row.started_at,
-      completedAt: row.completed_at,
+      scheduledAt: row.scheduled_at ?? undefined,
+      startedAt: row.started_at ?? undefined,
+      completedAt: row.completed_at ?? undefined,
       createdAt: row.created_at,
       updatedAt: row.updated_at,
     };
   }
 }
 
-export function createJobQueue(dbPath?: string, options?: any): JobQueueImpl {
+export function createJobQueue(dbPath?: string, options?: JobQueueOptions): JobQueueImpl {
   return new JobQueueImpl(dbPath, options);
 }

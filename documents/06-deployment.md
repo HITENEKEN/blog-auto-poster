@@ -48,12 +48,14 @@ pm2 start dist/web/server/index.js --name "blog-poster-web"
 ## 설치
 
 ### 1. 백엔드 의존성 설치
+
 ```bash
 cd blog-auto-poster
 npm install --legacy-peer-deps
 ```
 
 ### 2. 프론트엔드 의존성 설치
+
 ```bash
 cd src/web/client
 npm install
@@ -62,6 +64,7 @@ cd ../..
 ```
 
 ### 3. 설정 파일 준비
+
 ```bash
 # 기본 설정 복사
 cp config/default.yaml config/local.yaml
@@ -85,35 +88,37 @@ config/
 ```
 
 ### config/secrets.yaml 작성 예시
+
 ```yaml
 affiliates:
   coupang:
-    apiKey: "your-coupang-api-key"
-    apiSecret: "your-coupang-api-secret"
-    trackingId: "your-tracking-id"
+    apiKey: 'your-coupang-api-key'
+    apiSecret: 'your-coupang-api-secret'
+    trackingId: 'your-tracking-id'
 
 platforms:
   tistory:
-    blogName: "your-blog-name"
-    username: "your-username"
-    password: "your-password"
-    apiKey: "your-api-key"
+    blogName: 'your-blog-name'
+    username: 'your-username'
+    password: 'your-password'
+    apiKey: 'your-api-key'
 
   wordpress:
-    url: "https://your-site.com"
-    username: "your-username"
-    appPassword: "your-app-password"
+    url: 'https://your-site.com'
+    username: 'your-username'
+    appPassword: 'your-app-password'
 
   youtube-shorts:
-    clientId: "your-client-id"
-    clientSecret: "your-client-secret"
-    refreshToken: "your-refresh-token"
+    clientId: 'your-client-id'
+    clientSecret: 'your-client-secret'
+    refreshToken: 'your-refresh-token'
 
 web:
-  jwtSecret: "your-super-secret-jwt-key-min-32-chars"
+  jwtSecret: 'your-super-secret-jwt-key-min-32-chars'
 ```
 
 ### 환경변수로 대체 가능 (우선순위: 환경변수 > secrets.yaml > local.yaml > default.yaml)
+
 ```bash
 export BLOG_POSTER_AFFILIATES_COUPANG_API_KEY=your_key
 export BLOG_POSTER_AFFILIATES_COUPANG_API_SECRET=your_secret
@@ -133,12 +138,14 @@ export BLOG_POSTER_WEB_JWT_SECRET=your-super-secret-jwt-key-min-32-chars
 ## 빌드
 
 ### 백엔드
+
 ```bash
 npm run build
 # → dist/ 디렉토리에 컴파일 산출물 생성
 ```
 
 ### 프론트엔드
+
 ```bash
 cd src/web/client
 npm run build
@@ -150,6 +157,7 @@ npm run build
 ### 개발 모드
 
 #### CLI
+
 ```bash
 # 설정 위자드 (대화형)
 npm run cli -- config
@@ -177,6 +185,7 @@ npm run cli -- analytics --days=30
 ```
 
 #### 웹 대시보드 개발 서버
+
 ```bash
 # 백엔드 + 프론트엔드 동시 실행
 npm run web:dev
@@ -194,6 +203,7 @@ npm run web:dev:client    # 프론트엔드 (port 5173)
 ### 프로덕션 모드
 
 #### PM2로 프로세스 관리 (권장)
+
 ```bash
 # PM2 설치
 npm install -g pm2
@@ -218,6 +228,7 @@ pm2 save
 ```
 
 #### 직접 실행
+
 ```bash
 # 스케줄러 실행 (포그라운드)
 NODE_ENV=production node dist/cli/index.js schedule
@@ -227,6 +238,7 @@ NODE_ENV=production node dist/web/server/index.js
 ```
 
 ## 헬스체크
+
 ```bash
 # 서비스 상태 확인
 curl http://localhost:3000/health
@@ -246,6 +258,7 @@ curl http://localhost:3000/health
 ```
 
 ## 로그 확인
+
 ```bash
 # 실시간 로그 (PM2)
 pm2 logs blog-poster-scheduler --lines 100
@@ -263,6 +276,7 @@ sqlite3 data/jobs.sqlite "SELECT platform, title, status, published_at FROM publ
 ```
 
 ## 디렉토리 구조 (런타임)
+
 ```
 blog-auto-poster/
 ├── data/
@@ -291,18 +305,19 @@ blog-auto-poster/
 
 ## 트러블슈팅
 
-| 문제 | 원인 | 해결 |
-|------|------|------|
-| `Module not found` | 의존성 미설치 | `npm install --legacy-peer-deps` |
-| `better-sqlite3` 빌드 실패 | Python/빌드 도구 없음 | `xcode-select --install` (macOS) 또는 `build-essential` (Linux) |
-| 쿠팡 401 에러 | 토큰 만료/키 오류 | `secrets.yaml` 키 확인, 자동 갱신 로직 확인 |
-| 티스토리 이미지 업로드 실패 | 파일 > 5MB | Phase 2에서 청크 업로드 구현 예정 |
-| 유튜브 403 Forbidden | OAuth 스코프 부족 | `youtube.upload` 스코프 포함 확인 |
-| 스케줄러 미작동 | 타임존 불일치 | `scheduler.timezone: "Asia/Seoul"` 확인 |
-| WebSocket 연결 끊김 | 프록시/방화벽 | `ws://` → `wss://` 또는 프록시 설정 확인 |
-| PM2 프로세스 죽음 | 메모리 부족/에러 | `pm2 logs`로 원인 분석, `--max-memory-restart` 설정 |
+| 문제                        | 원인                  | 해결                                                            |
+| --------------------------- | --------------------- | --------------------------------------------------------------- |
+| `Module not found`          | 의존성 미설치         | `npm install --legacy-peer-deps`                                |
+| `better-sqlite3` 빌드 실패  | Python/빌드 도구 없음 | `xcode-select --install` (macOS) 또는 `build-essential` (Linux) |
+| 쿠팡 401 에러               | 토큰 만료/키 오류     | `secrets.yaml` 키 확인, 자동 갱신 로직 확인                     |
+| 티스토리 이미지 업로드 실패 | 파일 > 5MB            | Phase 2에서 청크 업로드 구현 예정                               |
+| 유튜브 403 Forbidden        | OAuth 스코프 부족     | `youtube.upload` 스코프 포함 확인                               |
+| 스케줄러 미작동             | 타임존 불일치         | `scheduler.timezone: "Asia/Seoul"` 확인                         |
+| WebSocket 연결 끊김         | 프록시/방화벽         | `ws://` → `wss://` 또는 프록시 설정 확인                        |
+| PM2 프로세스 죽음           | 메모리 부족/에러      | `pm2 logs`로 원인 분석, `--max-memory-restart` 설정             |
 
 ## 백업/복원
+
 ```bash
 # 자동 백업 (cron 예시)
 0 2 * * * sqlite3 /path/to/data/jobs.sqlite ".backup /path/to/data/backups/jobs-$(date +\%Y\%m\%d).sqlite"
@@ -315,15 +330,16 @@ sqlite3 data/jobs.sqlite ".restore data/backups/jobs-20260825.sqlite"
 ```
 
 ## SSL/HTTPS (프로덕션)
+
 ```nginx
 # Nginx 리버스 프록시 예시
 server {
     listen 443 ssl;
     server_name your-domain.com;
-    
+
     ssl_certificate /etc/letsencrypt/live/your-domain.com/fullchain.pem;
     ssl_certificate_key /etc/letsencrypt/live/your-domain.com/privkey.pem;
-    
+
     location / {
         proxy_pass http://localhost:3000;
         proxy_http_version 1.1;

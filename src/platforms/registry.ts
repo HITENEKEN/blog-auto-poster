@@ -2,6 +2,7 @@ import { PlatformAdapter, PlatformCredentials } from '@core/interfaces';
 import { TistoryAdapter } from './tistory/TistoryAdapter';
 import { WordPressAdapter } from './wordpress/WordPressAdapter';
 import { YouTubeShortsAdapter } from './youtube-shorts/YouTubeShortsAdapter';
+import { NaverAdapter } from './naver/NaverAdapter';
 import { ConfigurationError } from '@core/errors';
 import { getLogger } from '@core/logger';
 
@@ -14,6 +15,7 @@ const adapterRegistry = new Map<string, PlatformAdapterConstructor>();
 adapterRegistry.set('tistory', TistoryAdapter);
 adapterRegistry.set('wordpress', WordPressAdapter);
 adapterRegistry.set('youtube-shorts', YouTubeShortsAdapter);
+adapterRegistry.set('naver', NaverAdapter);
 
 export class PlatformRegistry {
   private instances = new Map<string, PlatformAdapter>();
@@ -55,7 +57,9 @@ export class PlatformRegistry {
     return adapter;
   }
 
-  async initializeAll(configs: Record<string, PlatformCredentials>): Promise<Map<string, PlatformAdapter>> {
+  async initializeAll(
+    configs: Record<string, PlatformCredentials>,
+  ): Promise<Map<string, PlatformAdapter>> {
     const results = new Map<string, PlatformAdapter>();
 
     for (const [name, config] of Object.entries(configs)) {
@@ -126,3 +130,4 @@ export function resetPlatformRegistry(): void {
 export { TistoryAdapter } from './tistory/TistoryAdapter';
 export { WordPressAdapter } from './wordpress/WordPressAdapter';
 export { YouTubeShortsAdapter } from './youtube-shorts/YouTubeShortsAdapter';
+export { NaverAdapter } from './naver/NaverAdapter';

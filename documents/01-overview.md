@@ -1,6 +1,7 @@
 # 시스템 개요
 
 ## 목적
+
 - 쿠팡 파트너스를 초기 타겟으로 하는 자동화된 블로그 포스팅 시스템 구축
 - 네이버 API Hub 키워드 리서치 → 경쟁 분석 → 주제 선정 → 콘텐츠 생성 → 발행 → 분석 동기화 전 과정 자동화
 - 티스토리, 워드프레스, 유튜브 쇼츠 멀티 플랫폼 발행 지원
@@ -8,56 +9,59 @@
 
 ## 구현 상태 (2026-08-26 기준)
 
-| 모듈 | 상태 | 비고 |
-|------|------|------|
-| **Core (설정/로깅/에러/HTTP/캐시)** | ✅ 완료 | TypeScript 컴파일 성공 |
-| **쿠팡 파트너스 어댑터** | ✅ 완료 | OAuth 2.0 + 자동 토큰 갱신 |
-| **플랫폼 어댑터 (티스토리/워드프레스/유튜브)** | ✅ 완료 | 인증/발행/이미지 업로드 |
-| **네이버 API Hub 연동** | ✅ 완료 | 키워드 검색 + 블로그 검색 (`naverapihub.apigw.ntruss.com`) |
-| **템플릿 엔진** | ✅ 완료 | Handlebars + 프론트매터 + SEO/JSON-LD |
-| **파트너스 최적화 템플릿 3종** | ✅ 완료 | 리뷰형 / 비교형 / 가이드형 |
-| **AI 이미지 생성** | ✅ 완료 | 멀티 프로바이더 (DALL-E/Stable Diffusion/Gemini/Placeholder) |
-| **키워드 리서치** | ✅ 완료 | API Hub + DataLab + Google Trends + Coupang |
-| **경쟁 분석** | ✅ 완료 | 네이버 블로그(API Hub)/티스토리/유튜브 |
-| **주제 선정/스코어링** | ✅ 완료 | 볼륨×커미션×갭×트렌드 가중치 |
-| **작업 큐 + 스케줄러** | ✅ 완료 | SQLite + node-cron (재시도/데드레터) |
-| **CLI** | ✅ 완료 | config/research(API Hub)/generate/publish/schedule/analytics |
-| **웹 대시보드 - 백엔드** | ✅ 완료 | Fastify + JWT + WebSocket + 20+ 엔드포인트 |
-| **웹 대시보드 - 프론트엔드** | ✅ 완료 | React + Vite 빌드 성공 (키워드 리서치 화면, 템플릿 CRUD+미리보기) |
-| **TypeScript 컴파일** | ✅ 성공 | `npm run build` 통과 |
-| **Vite 프로덕션 빌드** | ✅ 성공 | `npx vite build` 통과 (324KB bundle) |
+| 모듈                                           | 상태    | 비고                                                              |
+| ---------------------------------------------- | ------- | ----------------------------------------------------------------- |
+| **Core (설정/로깅/에러/HTTP/캐시)**            | ✅ 완료 | TypeScript 컴파일 성공                                            |
+| **쿠팡 파트너스 어댑터**                       | ✅ 완료 | OAuth 2.0 + 자동 토큰 갱신                                        |
+| **플랫폼 어댑터 (티스토리/워드프레스/유튜브)** | ✅ 완료 | 인증/발행/이미지 업로드                                           |
+| **네이버 API Hub 연동**                        | ✅ 완료 | 키워드 검색 + 블로그 검색 (`naverapihub.apigw.ntruss.com`)        |
+| **템플릿 엔진**                                | ✅ 완료 | Handlebars + 프론트매터 + SEO/JSON-LD                             |
+| **파트너스 최적화 템플릿 3종**                 | ✅ 완료 | 리뷰형 / 비교형 / 가이드형                                        |
+| **AI 이미지 생성**                             | ✅ 완료 | 멀티 프로바이더 (DALL-E/Stable Diffusion/Gemini/Placeholder)      |
+| **키워드 리서치**                              | ✅ 완료 | API Hub + DataLab + Google Trends + Coupang                       |
+| **경쟁 분석**                                  | ✅ 완료 | 네이버 블로그(API Hub)/티스토리/유튜브                            |
+| **주제 선정/스코어링**                         | ✅ 완료 | 볼륨×커미션×갭×트렌드 가중치                                      |
+| **작업 큐 + 스케줄러**                         | ✅ 완료 | SQLite + node-cron (재시도/데드레터)                              |
+| **CLI**                                        | ✅ 완료 | config/research(API Hub)/generate/publish/schedule/analytics      |
+| **웹 대시보드 - 백엔드**                       | ✅ 완료 | Fastify + JWT + WebSocket + 20+ 엔드포인트                        |
+| **웹 대시보드 - 프론트엔드**                   | ✅ 완료 | React + Vite 빌드 성공 (키워드 리서치 화면, 템플릿 CRUD+미리보기) |
+| **TypeScript 컴파일**                          | ✅ 성공 | `npm run build` 통과                                              |
+| **Vite 프로덕션 빌드**                         | ✅ 성공 | `npx vite build` 통과 (324KB bundle)                              |
 
 ---
 
 ## 핵심 특징
-| 특징 | 설명 |
-|------|------|
-| **모듈식 어댑터 패턴** | 제휴 네트워크(쿠팡), 블로그 플랫폼(티스토리/워드프레스/유튜브), 이미지 생성 프로바이더(DALL-E/Stable Diffusion/Gemini) 독립 교체 가능 |
-| **네이버 API Hub** | NCP API Gateway 방식(`X-NCP-APIGW-API-KEY-ID/KEY`)으로 키워드 검색 + 블로그 검색. 기존 openapi.naver.com(DataLab) 방식도 유지 |
-| **파트너스 최적화 템플릿** | 리뷰형(장단점표+FAQ+이중CTA), 비교형(BEST N 비교표), 가이드형(체크리스트+예산별 추천). 파트너스 고지 문구 법적 필수 반영 |
-| **영속적 작업 큐** | SQLite(`better-sqlite3`) 기반, 프로세스 재시작 후에도 크론 스케줄 및 작업 상태 유지 |
-| **실시간 웹 대시보드** | WebSocket 기반 실시간 로그 스트리밍, 작업 진행률, 알림 푸시 |
-| **템플릿 CRUD + 미리보기** | 웹에서 Handlebars 코드 편집 + 데스크톱/모바일 실시간 HTML 미리보기 |
+
+| 특징                       | 설명                                                                                                                                  |
+| -------------------------- | ------------------------------------------------------------------------------------------------------------------------------------- |
+| **모듈식 어댑터 패턴**     | 제휴 네트워크(쿠팡), 블로그 플랫폼(티스토리/워드프레스/유튜브), 이미지 생성 프로바이더(DALL-E/Stable Diffusion/Gemini) 독립 교체 가능 |
+| **네이버 API Hub**         | NCP API Gateway 방식(`X-NCP-APIGW-API-KEY-ID/KEY`)으로 키워드 검색 + 블로그 검색. 기존 openapi.naver.com(DataLab) 방식도 유지         |
+| **파트너스 최적화 템플릿** | 리뷰형(장단점표+FAQ+이중CTA), 비교형(BEST N 비교표), 가이드형(체크리스트+예산별 추천). 파트너스 고지 문구 법적 필수 반영              |
+| **영속적 작업 큐**         | SQLite(`better-sqlite3`) 기반, 프로세스 재시작 후에도 크론 스케줄 및 작업 상태 유지                                                   |
+| **실시간 웹 대시보드**     | WebSocket 기반 실시간 로그 스트리밍, 작업 진행률, 알림 푸시                                                                           |
+| **템플릿 CRUD + 미리보기** | 웹에서 Handlebars 코드 편집 + 데스크톱/모바일 실시간 HTML 미리보기                                                                    |
 
 ## 지원 플랫폼
-| 구분 | 플랫폼 | 인증 방식 | 주요 기능 |
-|------|--------|-----------|-----------|
-| **제휴 네트워크** | 쿠팡 파트너스 | OAuth 2.0 (Client Credentials + Refresh Token) | 상품 검색, 상세, 트래킹 URL, 커미션율 |
-| | 알리익스프레스 | 구현 예정 | - |
-| | 네이버 쇼핑 커넥트 | 구현 예정 | - |
-| **블로그 플랫폼** | 티스토리 | Username/Password + API Key (세션 기반) | 포스트 작성/수정, 카테고리, 멀티파트 이미지 업로드 |
-| | 워드프레스 | Application Password / JWT | REST API CRUD, 미디어 업로드, 택소노미 동기화 |
-| | 유튜브 쇼츠 | OAuth 2.0 (`youtube.upload` scope) | 재개 가능 업로드, 썸네일, 해시태그 추출 |
-| **키워드 리서치** | 네이버 API Hub | X-NCP-APIGW-API-KEY-ID/KEY | 블로그 검색, 경쟁도 계산, 연관 키워드 추출 |
-| | 네이버 DataLab (legacy) | X-Naver-Client-Id/Secret | 검색 트렌드 |
-| | Google Trends | SerpAPI Key (선택) | 글로벌 트렌드 |
-| | 쿠팡 자동완성 | Coupang Adapter | 상품 연관 키워드 |
-| **이미지 생성** | DALL-E 3 | API Key | 제품 사진, 라이프스타일, 비교 차트 |
-| | Stable Diffusion | API Key | - |
-| | Google Gemini | API Key | - |
-| | Placeholder | 없음 | 폴백용 |
+
+| 구분              | 플랫폼                  | 인증 방식                                      | 주요 기능                                          |
+| ----------------- | ----------------------- | ---------------------------------------------- | -------------------------------------------------- |
+| **제휴 네트워크** | 쿠팡 파트너스           | OAuth 2.0 (Client Credentials + Refresh Token) | 상품 검색, 상세, 트래킹 URL, 커미션율              |
+|                   | 알리익스프레스          | 구현 예정                                      | -                                                  |
+|                   | 네이버 쇼핑 커넥트      | 구현 예정                                      | -                                                  |
+| **블로그 플랫폼** | 티스토리                | Username/Password + API Key (세션 기반)        | 포스트 작성/수정, 카테고리, 멀티파트 이미지 업로드 |
+|                   | 워드프레스              | Application Password / JWT                     | REST API CRUD, 미디어 업로드, 택소노미 동기화      |
+|                   | 유튜브 쇼츠             | OAuth 2.0 (`youtube.upload` scope)             | 재개 가능 업로드, 썸네일, 해시태그 추출            |
+| **키워드 리서치** | 네이버 API Hub          | X-NCP-APIGW-API-KEY-ID/KEY                     | 블로그 검색, 경쟁도 계산, 연관 키워드 추출         |
+|                   | 네이버 DataLab (legacy) | X-Naver-Client-Id/Secret                       | 검색 트렌드                                        |
+|                   | Google Trends           | SerpAPI Key (선택)                             | 글로벌 트렌드                                      |
+|                   | 쿠팡 자동완성           | Coupang Adapter                                | 상품 연관 키워드                                   |
+| **이미지 생성**   | DALL-E 3                | API Key                                        | 제품 사진, 라이프스타일, 비교 차트                 |
+|                   | Stable Diffusion        | API Key                                        | -                                                  |
+|                   | Google Gemini           | API Key                                        | -                                                  |
+|                   | Placeholder             | 없음                                           | 폴백용                                             |
 
 ## 자동화 파이프라인
+
 ```
 매일 06:00  →  키워드 리서치 (API Hub 블로그 검색 → 경쟁도/볼륨/트렌드 산출)
 매일 07:00  →  콘텐츠 생성 (파트너스 템플릿 렌더링 + AI 이미지 + SEO/JSON-LD)
@@ -67,8 +71,8 @@
 
 ## 템플릿 종류
 
-| 템플릿 | 용도 | 핵심 요소 |
-|--------|------|-----------|
-| `coupang-partner-review.hbs` | 단일 제품 리뷰 | 한줄평→가격카드→장단점표→상세리뷰→비교표→FAQ→이중CTA→고지 |
-| `coupang-comparison-guide.hbs` | 다중 제품 비교 | 전체비교표→제품별 카드→예산별 추천→FAQ→고지 |
-| `coupang-buying-guide.hbs` | 초보자 가이드 | 체크리스트→예산별 스텝→TOP PICK→실수방지→FAQ→고지 |
+| 템플릿                         | 용도           | 핵심 요소                                                 |
+| ------------------------------ | -------------- | --------------------------------------------------------- |
+| `coupang-partner-review.hbs`   | 단일 제품 리뷰 | 한줄평→가격카드→장단점표→상세리뷰→비교표→FAQ→이중CTA→고지 |
+| `coupang-comparison-guide.hbs` | 다중 제품 비교 | 전체비교표→제품별 카드→예산별 추천→FAQ→고지               |
+| `coupang-buying-guide.hbs`     | 초보자 가이드  | 체크리스트→예산별 스텝→TOP PICK→실수방지→FAQ→고지         |

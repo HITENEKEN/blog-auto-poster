@@ -1,6 +1,7 @@
 # 아키텍처
 
 ## 디렉토리 구조
+
 ```
 blog-auto-poster/
 ├── src/
@@ -22,6 +23,7 @@ blog-auto-poster/
 ```
 
 ## 모듈 간 의존성
+
 ```
 ┌─────────────┐     ┌─────────────┐     ┌─────────────┐
 │   Config    │────▶│   Logger    │◀───│   Errors    │
@@ -70,24 +72,28 @@ blog-auto-poster/
 ## 데이터 플로우
 
 ### 1. 키워드 리서치 (매일 06:00)
+
 ```
 Seed Keywords → KeywordResearcher (Multi-provider: Naver/Google/Coupang)
 → Volume/Competition/Trend 수집 → 캐싱 (24h TTL)
 ```
 
 ### 2. 경쟁 분석
+
 ```
 Keywords → CompetitorAnalyzer (Naver Blog/Tistory/YouTube)
 → 상위 포스트 구조/제휴링크/CTA 추출 → TopicRecommendation 생성
 ```
 
 ### 3. 주제 선정
+
 ```
 TopicSelector.select() → Score = Volume×0.3 + Commission×0.25 + Gap×0.25 + Trend×0.2
 → 우선순위 큐에 Job(RESEARCH/GENERATE) 인큐
 ```
 
 ### 4. 콘텐츠 생성 (매일 07:00)
+
 ```
 Job(GENERATE) → CoupangAdapter.getProductDetails()
 → TemplateEngine.render() → ImageGenerator.generate()
@@ -95,12 +101,14 @@ Job(GENERATE) → CoupangAdapter.getProductDetails()
 ```
 
 ### 5. 발행 (매일 08:00)
+
 ```
 Job(PUBLISH) → PlatformAdapter.createPost()
 → 발행 결과 기록 (published_posts 테이블)
 ```
 
 ### 6. 분석 동기화 (매시간)
+
 ```
 Job(SYNC_ANALYTICS) → 플랫폼별 조회수/클릭/수익 수집
 ```
@@ -108,6 +116,7 @@ Job(SYNC_ANALYTICS) → 플랫폼별 조회수/클릭/수익 수집
 ## 핵심 인터페이스 (src/core/interfaces.ts)
 
 ### AffiliateAdapter
+
 ```typescript
 interface AffiliateAdapter {
   readonly name: string;
@@ -122,6 +131,7 @@ interface AffiliateAdapter {
 ```
 
 ### PlatformAdapter
+
 ```typescript
 interface PlatformAdapter {
   readonly name: string;
@@ -136,6 +146,7 @@ interface PlatformAdapter {
 ```
 
 ### TemplateEngine
+
 ```typescript
 interface TemplateEngine {
   registerHelper(name: string, helper: HandlebarsHelper): void;
@@ -148,6 +159,7 @@ interface TemplateEngine {
 ```
 
 ### JobQueue
+
 ```typescript
 interface JobQueue {
   enqueue(job: Omit<Job, 'id' | 'retryCount' | 'status'>): Promise<string>;
@@ -163,7 +175,9 @@ interface JobQueue {
 ```
 
 ## 레지스트리 패턴
+
 모든 어댑터는 팩토리 패턴으로 등록/조회:
+
 ```typescript
 // 제휴 어댑터 등록
 getAffiliateRegistry().register('coupang', CoupangAdapter);

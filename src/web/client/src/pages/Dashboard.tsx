@@ -11,7 +11,6 @@ import {
   ShoppingBag,
   Clock,
   CheckCircle,
-  XCircle,
 } from 'lucide-react';
 import { formatDistanceToNow } from 'date-fns';
 
@@ -32,8 +31,17 @@ function StatCard({ title, value, change, icon, color }: StatCardProps) {
             <p className="text-sm font-medium text-muted-foreground">{title}</p>
             <p className="text-3xl font-bold mt-1">{value}</p>
             {change !== undefined && (
-              <p className={clsx('text-sm mt-1 flex items-center gap-1', change >= 0 ? 'text-green-600' : 'text-red-600')}>
-                {change >= 0 ? <TrendingUp className="h-4 w-4" /> : <TrendingDown className="h-4 w-4" />}
+              <p
+                className={clsx(
+                  'text-sm mt-1 flex items-center gap-1',
+                  change >= 0 ? 'text-green-600' : 'text-red-600',
+                )}
+              >
+                {change >= 0 ? (
+                  <TrendingUp className="h-4 w-4" />
+                ) : (
+                  <TrendingDown className="h-4 w-4" />
+                )}
                 {Math.abs(change)}% vs 지난주
               </p>
             )}
@@ -55,8 +63,8 @@ export default function Dashboard() {
       try {
         const response = await api.get('/api/dashboard/stats');
         setStats(response.data);
-      } catch (err: any) {
-        setError(err.message || '데이터를 불러오는데 실패했습니다.');
+      } catch (err) {
+        setError(err instanceof Error ? err.message : '데이터를 불러오는데 실패했습니다.');
       } finally {
         setLoading(false);
       }
@@ -145,7 +153,12 @@ export default function Dashboard() {
               {Object.entries(stats?.platforms || {}).map(([platform, connected]) => (
                 <div key={platform} className="flex items-center justify-between">
                   <div className="flex items-center gap-3">
-                    <div className={clsx('h-3 w-3 rounded-full', connected ? 'bg-green-500' : 'bg-red-500')} />
+                    <div
+                      className={clsx(
+                        'h-3 w-3 rounded-full',
+                        connected ? 'bg-green-500' : 'bg-red-500',
+                      )}
+                    />
                     <span className="capitalize">{platform}</span>
                   </div>
                   <span className="text-sm text-muted-foreground">
@@ -170,7 +183,12 @@ export default function Dashboard() {
                     <ShoppingBag className="h-5 w-5 text-muted-foreground" />
                     <span className="capitalize">{affiliate}</span>
                   </div>
-                  <span className={clsx('text-sm font-medium', connected ? 'text-green-600' : 'text-red-600')}>
+                  <span
+                    className={clsx(
+                      'text-sm font-medium',
+                      connected ? 'text-green-600' : 'text-red-600',
+                    )}
+                  >
                     {connected ? '연결됨' : '연결 안됨'}
                   </span>
                 </div>
@@ -198,16 +216,29 @@ export default function Dashboard() {
                     className="flex items-center justify-between p-3 rounded-lg border hover:bg-accent/50 transition-colors"
                   >
                     <div className="flex items-center gap-3 min-w-0">
-                      <div className={clsx('h-2 w-2 rounded-full', post.status === 'published' ? 'bg-green-500' : 'bg-red-500')} />
+                      <div
+                        className={clsx(
+                          'h-2 w-2 rounded-full',
+                          post.status === 'published' ? 'bg-green-500' : 'bg-red-500',
+                        )}
+                      />
                       <div>
                         <p className="font-medium truncate max-w-xs">{post.title}</p>
                         <p className="text-sm text-muted-foreground">
-                          {post.platform} • {formatDistanceToNow(new Date(post.publishedAt), { addSuffix: true })}
+                          {post.platform} •{' '}
+                          {formatDistanceToNow(new Date(post.publishedAt), { addSuffix: true })}
                         </p>
                       </div>
                     </div>
                     <div className="flex items-center gap-2">
-                      <span className={clsx('px-2 py-1 rounded-full text-xs', post.status === 'published' ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700')}>
+                      <span
+                        className={clsx(
+                          'px-2 py-1 rounded-full text-xs',
+                          post.status === 'published'
+                            ? 'bg-green-100 text-green-700'
+                            : 'bg-red-100 text-red-700',
+                        )}
+                      >
                         {post.status === 'published' ? '발행됨' : '실패'}
                       </span>
                       <Button variant="ghost" size="icon" asChild>

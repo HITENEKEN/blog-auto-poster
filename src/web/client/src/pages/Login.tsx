@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { useAuth } from '../context/AuthContext';
-import { api } from '../services/api';
+import { isAxiosError } from 'axios';
 import { Card, CardContent, CardHeader, CardTitle } from './ui/Card';
 import { Button } from './ui/Button';
 import { Input } from './ui/Input';
@@ -21,8 +21,11 @@ export default function Login() {
 
     try {
       await login(username, password);
-    } catch (err: any) {
-      setError(err.response?.data?.message || '로그인에 실패했습니다.');
+    } catch (err) {
+      setError(
+        (isAxiosError<{ message?: string }>(err) && err.response?.data?.message) ||
+          '로그인에 실패했습니다.',
+      );
     } finally {
       setLoading(false);
     }
@@ -86,7 +89,9 @@ export default function Login() {
           </form>
 
           <div className="mt-6 p-3 text-xs text-muted-foreground bg-muted/50 rounded-lg">
-            <p>기본 계정: <code>admin</code> / <code>changeme</code></p>
+            <p>
+              기본 계정: <code>admin</code> / <code>changeme</code>
+            </p>
             <p className="mt-1">config/secrets.yaml에서 변경 가능합니다.</p>
           </div>
         </CardContent>

@@ -1,9 +1,7 @@
 import cron from 'node-cron';
 import { getLogger } from '@core/logger';
 import { JobQueue, JobType } from '@core/interfaces';
-import { JobQueueImpl } from './JobQueue';
 import { SchedulerConfig, ScheduledJobConfig } from '@core/interfaces';
-import { ConfigurationError } from '@core/errors';
 
 const logger = getLogger('cron-scheduler');
 
@@ -72,28 +70,32 @@ export class CronScheduler {
       this.scheduledJobs.get(name)!.stop();
     }
 
-    const task = cron.schedule(config.cron, async () => {
-      logger.info({ jobName: name, type: config.type }, 'Executing scheduled job');
+    const task = cron.schedule(
+      config.cron,
+      async () => {
+        logger.info({ jobName: name, type: config.type }, 'Executing scheduled job');
 
-      try {
-        const jobId = await this.jobQueue.enqueue({
-          type: config.type as JobType,
-          priority: config.priority || 0,
-          payload: config.config || {},
-          maxAttempts: config.maxAttempts || 3,
-          attempts: 0,
-          createdAt: new Date().toISOString(),
-          updatedAt: new Date().toISOString(),
-        });
+        try {
+          const jobId = await this.jobQueue.enqueue({
+            type: config.type as JobType,
+            priority: config.priority || 0,
+            payload: config.config || {},
+            maxAttempts: config.maxAttempts || 3,
+            attempts: 0,
+            createdAt: new Date().toISOString(),
+            updatedAt: new Date().toISOString(),
+          });
 
-        logger.info({ jobName: name, jobId }, 'Scheduled job enqueued');
-      } catch (error) {
-        logger.error({ jobName: name, error: String(error) }, 'Failed to enqueue scheduled job');
-      }
-    }, {
-      scheduled: true,
-      timezone: this.config.timezone,
-    });
+          logger.info({ jobName: name, jobId }, 'Scheduled job enqueued');
+        } catch (error) {
+          logger.error({ jobName: name, error: String(error) }, 'Failed to enqueue scheduled job');
+        }
+      },
+      {
+        scheduled: true,
+        timezone: this.config.timezone,
+      },
+    );
 
     this.scheduledJobs.set(name, task);
     this.jobConfigs.set(name, config);

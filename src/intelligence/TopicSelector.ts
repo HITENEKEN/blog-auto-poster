@@ -1,4 +1,3 @@
-// @ts-nocheck
 import { getLogger } from '@core/logger';
 import {
   TopicRecommendation,
@@ -12,7 +11,10 @@ import {
 const logger = getLogger('topic-selector');
 
 export class TopicSelectorImpl implements TopicSelector {
-  async select(candidates: TopicRecommendation[], config: TopicSelectionConfig): Promise<TopicRecommendation[]> {
+  async select(
+    candidates: TopicRecommendation[],
+    config: TopicSelectionConfig,
+  ): Promise<TopicRecommendation[]> {
     const {
       minScore = 0.3,
       maxResults = 10,
@@ -28,20 +30,26 @@ export class TopicSelectorImpl implements TopicSelector {
     logger.info({ candidateCount: candidates.length, config }, 'Selecting topics');
 
     // Score each candidate
-    const scored = candidates.map(candidate => ({
+    const scored = candidates.map((candidate) => ({
       ...candidate,
       finalScore: this.calculateFinalScore(candidate, weights),
     }));
 
     // Filter by minimum score
-    const filtered = scored.filter(c => c.finalScore >= minScore);
+    const filtered = scored.filter((c) => c.finalScore >= minScore);
 
     // Apply additional filters
-    const filtered2 = filtered.filter(c => {
+    const filtered2 = filtered.filter((c) => {
       if (filters.minVolume && c.keywordData.volume < filters.minVolume) return false;
-      if (filters.maxCompetition && c.keywordData.competition > filters.maxCompetition) return false;
+      if (filters.maxCompetition && c.keywordData.competition > filters.maxCompetition)
+        return false;
       if (filters.trends && !filters.trends.includes(c.keywordData.trend)) return false;
-      if (filters.minCommission && c.affiliateData && c.affiliateData.commissionRate < filters.minCommission) return false;
+      if (
+        filters.minCommission &&
+        c.affiliateData &&
+        c.affiliateData.commissionRate < filters.minCommission
+      )
+        return false;
       return true;
     });
 
@@ -55,8 +63,16 @@ export class TopicSelectorImpl implements TopicSelector {
     return results;
   }
 
-  private calculateFinalScore(candidate: TopicRecommendation, weights: TopicSelectionConfig['weights']): number {
-    const { searchVolume = 0.3, commissionRate = 0.25, contentGap = 0.25, trendVelocity = 0.2 } = weights;
+  private calculateFinalScore(
+    candidate: TopicRecommendation,
+    weights: TopicSelectionConfig['weights'],
+  ): number {
+    const {
+      searchVolume = 0.3,
+      commissionRate = 0.25,
+      contentGap = 0.25,
+      trendVelocity = 0.2,
+    } = weights;
 
     // Normalize search volume (0-1)
     const volumeScore = Math.min(candidate.keywordData.volume / 100000, 1);
@@ -118,12 +134,19 @@ export class TopicCandidateBuilder {
     }
 
     // Check for missing elements
-    const hasAffiliateLinks = posts.some(p => p.affiliateLinks && p.affiliateLinks.length > 0);
-    const hasDetailedSpecs = posts.some(p => p.structure.some(s => s.text.includes('스펙') || s.text.includes('사양')));
-    const hasComparison = posts.some(p => p.structure.some(s => s.text.includes('비교') || s.text.includes('vs')));
-    const hasProsCons = posts.some(p => p.structure.some(s => s.text.includes('장점') || s.text.includes('단점')));
-    const hasVideo = posts.some(p => p.metadata?.hasVideo);
-    const avgImageCount = posts.reduce((sum, p) => sum + (p.metadata?.imageCount || 0), 0) / posts.length;
+    const hasAffiliateLinks = posts.some((p) => p.affiliateLinks && p.affiliateLinks.length > 0);
+    const hasDetailedSpecs = posts.some((p) =>
+      p.structure.some((s) => s.text.includes('스펙') || s.text.includes('사양')),
+    );
+    const hasComparison = posts.some((p) =>
+      p.structure.some((s) => s.text.includes('비교') || s.text.includes('vs')),
+    );
+    const hasProsCons = posts.some((p) =>
+      p.structure.some((s) => s.text.includes('장점') || s.text.includes('단점')),
+    );
+    const hasVideo = posts.some((p) => p.metadata?.hasVideo);
+    const avgImageCount =
+      posts.reduce((sum, p) => sum + (p.metadata?.imageCount || 0), 0) / posts.length;
 
     if (!hasAffiliateLinks) gaps.push('제휴 링크 부재 - 수익화 기회');
     if (!hasDetailedSpecs) gaps.push('상세 스펙 분석 부족');
@@ -149,9 +172,9 @@ export class TopicCandidateBuilder {
     }
 
     // Competitor gap angles
-    const hasReview = posts.some(p => /리뷰|후기|사용기/.test(p.title));
-    const hasComparison = posts.some(p => /비교|vs|대결/.test(p.title));
-    const hasGuide = posts.some(p => /가이드|추천|선택|고르는/.test(p.title));
+    const hasReview = posts.some((p) => /리뷰|후기|사용기/.test(p.title));
+    const hasComparison = posts.some((p) => /비교|vs|대결/.test(p.title));
+    const hasGuide = posts.some((p) => /가이드|추천|선택|고르는/.test(p.title));
 
     if (!hasReview) angles.push('실사용 리뷰 앵글');
     if (!hasComparison) angles.push('경쟁 제품 비교 앵글');
@@ -167,7 +190,10 @@ export class TopicCandidateBuilder {
     return angles.slice(0, 5);
   }
 
-  private static recommendTemplate(keywordData: KeywordData, affiliateData?: AffiliateProduct): string {
+  private static recommendTemplate(
+    keywordData: KeywordData,
+    affiliateData?: AffiliateProduct,
+  ): string {
     if (affiliateData) {
       return 'coupang-product-review';
     }

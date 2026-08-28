@@ -11,7 +11,6 @@ import {
   HandlebarsHelper,
   HandlebarsContext,
   HandlebarsOptions,
-  HandlebarsData,
 } from '@core/interfaces';
 import { TemplateError, ValidationError } from '@core/errors';
 
@@ -44,10 +43,13 @@ export class TemplateEngineImpl implements TemplateEngine {
     });
 
     // Truncate text to specified length
-    Handlebars.registerHelper('truncate', (text: string, length: number, suffix: string = '...'): string => {
-      if (!text || text.length <= length) return text || '';
-      return text.substring(0, length - suffix.length) + suffix;
-    });
+    Handlebars.registerHelper(
+      'truncate',
+      (text: string, length: number, suffix: string = '...'): string => {
+        if (!text || text.length <= length) return text || '';
+        return text.substring(0, length - suffix.length) + suffix;
+      },
+    );
 
     // Render stars for rating
     Handlebars.registerHelper('renderStars', (rating: number, maxStars: number = 5): string => {
@@ -62,60 +64,88 @@ export class TemplateEngineImpl implements TemplateEngine {
     });
 
     // SEO keywords extraction
-    Handlebars.registerHelper('seoKeywords', (data: TemplateData, maxKeywords: number = 10): string => {
-      const keywords: string[] = [];
+    Handlebars.registerHelper(
+      'seoKeywords',
+      (data: TemplateData, maxKeywords: number = 10): string => {
+        const keywords: string[] = [];
 
-      if (data.productName) keywords.push(String(data.productName));
-      if (data.categoryName) keywords.push(String(data.categoryName));
-      if (data.brand) keywords.push(String(data.brand));
-      if (data.tags && Array.isArray(data.tags)) {
-        keywords.push(...data.tags.map(String));
-      }
+        if (data.productName) keywords.push(String(data.productName));
+        if (data.categoryName) keywords.push(String(data.categoryName));
+        if (data.brand) keywords.push(String(data.brand));
+        if (data.tags && Array.isArray(data.tags)) {
+          keywords.push(...data.tags.map(String));
+        }
 
-      // Add default keywords
-      keywords.push('리뷰', '추천', '가성비', '후기');
+        // Add default keywords
+        keywords.push('리뷰', '추천', '가성비', '후기');
 
-      const unique = [...new Set(keywords)];
-      return unique.slice(0, maxKeywords).join(', ');
-    });
+        const unique = [...new Set(keywords)];
+        return unique.slice(0, maxKeywords).join(', ');
+      },
+    );
 
     // Affiliate link formatter
-    Handlebars.registerHelper('affiliateLink', (url: string, text: string, subId?: string): string => {
-      if (!url) return text;
-      const separator = url.includes('?') ? '&' : '?';
-      const finalUrl = subId ? `${url}${separator}subId=${subId}` : url;
-      return `<a href="${finalUrl}" target="_blank" rel="nofollow sponsored">${text}</a>`;
-    });
+    Handlebars.registerHelper(
+      'affiliateLink',
+      (url: string, text: string, subId?: string): string => {
+        if (!url) return text;
+        const separator = url.includes('?') ? '&' : '?';
+        const finalUrl = subId ? `${url}${separator}subId=${subId}` : url;
+        return `<a href="${finalUrl}" target="_blank" rel="nofollow sponsored">${text}</a>`;
+      },
+    );
 
     // Format date
-    Handlebars.registerHelper('formatDate', (date: string | Date, format: string = 'YYYY-MM-DD'): string => {
-      const d = new Date(date);
-      if (isNaN(d.getTime())) return '';
-      const year = d.getFullYear();
-      const month = String(d.getMonth() + 1).padStart(2, '0');
-      const day = String(d.getDate()).padStart(2, '0');
-      return format
-        .replace('YYYY', String(year))
-        .replace('MM', month)
-        .replace('DD', day);
-    });
+    Handlebars.registerHelper(
+      'formatDate',
+      (date: string | Date, format: string = 'YYYY-MM-DD'): string => {
+        const d = new Date(date);
+        if (isNaN(d.getTime())) return '';
+        const year = d.getFullYear();
+        const month = String(d.getMonth() + 1).padStart(2, '0');
+        const day = String(d.getDate()).padStart(2, '0');
+        return format.replace('YYYY', String(year)).replace('MM', month).replace('DD', day);
+      },
+    );
 
     // Conditional helper
-    Handlebars.registerHelper('ifEq', function (this: HandlebarsContext, a: unknown, b: unknown, options: HandlebarsOptions): string {
-      return a === b ? options.fn!(this) : options.inverse!(this);
-    });
+    Handlebars.registerHelper(
+      'ifEq',
+      function (
+        this: HandlebarsContext,
+        a: unknown,
+        b: unknown,
+        options: HandlebarsOptions,
+      ): string {
+        return a === b ? options.fn!(this) : options.inverse!(this);
+      },
+    );
 
-    Handlebars.registerHelper('ifNe', function (this: HandlebarsContext, a: unknown, b: unknown, options: HandlebarsOptions): string {
-      return a !== b ? options.fn!(this) : options.inverse!(this);
-    });
+    Handlebars.registerHelper(
+      'ifNe',
+      function (
+        this: HandlebarsContext,
+        a: unknown,
+        b: unknown,
+        options: HandlebarsOptions,
+      ): string {
+        return a !== b ? options.fn!(this) : options.inverse!(this);
+      },
+    );
 
-    Handlebars.registerHelper('ifGt', function (this: HandlebarsContext, a: number, b: number, options: HandlebarsOptions): string {
-      return a > b ? options.fn!(this) : options.inverse!(this);
-    });
+    Handlebars.registerHelper(
+      'ifGt',
+      function (this: HandlebarsContext, a: number, b: number, options: HandlebarsOptions): string {
+        return a > b ? options.fn!(this) : options.inverse!(this);
+      },
+    );
 
-    Handlebars.registerHelper('ifLt', function (this: HandlebarsContext, a: number, b: number, options: HandlebarsOptions): string {
-      return a < b ? options.fn!(this) : options.inverse!(this);
-    });
+    Handlebars.registerHelper(
+      'ifLt',
+      function (this: HandlebarsContext, a: number, b: number, options: HandlebarsOptions): string {
+        return a < b ? options.fn!(this) : options.inverse!(this);
+      },
+    );
 
     // JSON stringify for debugging
     Handlebars.registerHelper('json', (context: unknown): string => {
@@ -141,7 +171,9 @@ export class TemplateEngineImpl implements TemplateEngine {
       return;
     }
 
-    const files = fs.readdirSync(this.templatesDir).filter(f => f.endsWith('.hbs') || f.endsWith('.handlebars'));
+    const files = fs
+      .readdirSync(this.templatesDir)
+      .filter((f) => f.endsWith('.hbs') || f.endsWith('.handlebars'));
 
     for (const file of files) {
       try {
@@ -166,7 +198,7 @@ export class TemplateEngineImpl implements TemplateEngine {
       throw new TemplateError(
         `Invalid template format: missing frontmatter in ${filename}`,
         'PARSE_FAILED',
-        filename
+        filename,
       );
     }
 
@@ -180,7 +212,7 @@ export class TemplateEngineImpl implements TemplateEngine {
       throw new TemplateError(
         `Invalid frontmatter YAML in ${filename}: ${String(error)}`,
         'PARSE_FAILED',
-        filename
+        filename,
       );
     }
 
@@ -189,7 +221,7 @@ export class TemplateEngineImpl implements TemplateEngine {
       throw new TemplateError(
         `Template missing 'name' in frontmatter: ${filename}`,
         'VALIDATION_FAILED',
-        filename
+        filename,
       );
     }
 
@@ -224,7 +256,12 @@ export class TemplateEngineImpl implements TemplateEngine {
 
     // Validate required fields
     for (const field of template.frontmatter.requiredFields) {
-      if (!(field in data) || data[field] === undefined || data[field] === null || data[field] === '') {
+      if (
+        !(field in data) ||
+        data[field] === undefined ||
+        data[field] === null ||
+        data[field] === ''
+      ) {
         throw new ValidationError(
           `Required field missing: ${field}`,
           field,
@@ -232,7 +269,7 @@ export class TemplateEngineImpl implements TemplateEngine {
           [`Required field: ${field}`],
           'VALIDATION_ERROR',
           400,
-          { templateName, missingField: field }
+          { templateName, missingField: field },
         );
       }
     }
@@ -270,8 +307,8 @@ export class TemplateEngineImpl implements TemplateEngine {
       description = descTemplate(renderData);
 
       if (seo.keywords && Array.isArray(seo.keywords)) {
-        const keywordTemplates = seo.keywords.map(k => Handlebars.compile(k));
-        keywords = keywordTemplates.map(t => t(renderData));
+        const keywordTemplates = seo.keywords.map((k) => Handlebars.compile(k));
+        keywords = keywordTemplates.map((t) => t(renderData));
       }
 
       if (seo.jsonLd) {
@@ -288,12 +325,18 @@ export class TemplateEngineImpl implements TemplateEngine {
         jsonLd,
       },
       tags: template.frontmatter.requiredFields.includes('tags') ? (data.tags as string[]) : [],
-      categories: template.frontmatter.requiredFields.includes('category') ? [data.category as string] : [],
+      categories: template.frontmatter.requiredFields.includes('category')
+        ? [data.category as string]
+        : [],
     };
   }
 
-  private generateJsonLd(seo: TemplateFrontmatter['seo'], data: TemplateData): Record<string, unknown> | undefined {
-    if (!seo || (!seo.jsonLd?.includeReview && !seo.jsonLd?.includeAggregateRating)) return undefined;
+  private generateJsonLd(
+    seo: TemplateFrontmatter['seo'],
+    data: TemplateData,
+  ): Record<string, unknown> | undefined {
+    if (!seo || (!seo.jsonLd?.includeReview && !seo.jsonLd?.includeAggregateRating))
+      return undefined;
 
     const jsonLd: Record<string, unknown> = {
       '@context': 'https://schema.org',
@@ -309,7 +352,10 @@ export class TemplateEngineImpl implements TemplateEngine {
         '@type': 'Offer',
         price: data.price,
         priceCurrency: data.currency || 'KRW',
-        availability: data.availability === 'in_stock' ? 'https://schema.org/InStock' : 'https://schema.org/OutOfStock',
+        availability:
+          data.availability === 'in_stock'
+            ? 'https://schema.org/InStock'
+            : 'https://schema.org/OutOfStock',
         url: data.affiliateUrl,
       };
     }

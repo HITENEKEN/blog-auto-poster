@@ -1,4 +1,12 @@
-import React, { createContext, useContext, useEffect, useRef, useState, ReactNode, useCallback } from 'react';
+import React, {
+  createContext,
+  useContext,
+  useEffect,
+  useRef,
+  useState,
+  ReactNode,
+  useCallback,
+} from 'react';
 import { WebSocketMessage, JobProgress, LogEntry } from '@shared/types';
 
 interface WebSocketContextType {
@@ -12,7 +20,9 @@ interface WebSocketContextType {
 
 const WebSocketContext = createContext<WebSocketContextType | undefined>(undefined);
 
-const WS_URL = import.meta.env.VITE_WS_URL || 'ws://localhost:3000/ws';
+const WS_URL =
+  import.meta.env.VITE_WS_URL ||
+  `${window.location.protocol === 'https:' ? 'wss:' : 'ws:'}//${window.location.host}/ws`;
 
 export function WebSocketProvider({ children }: { children: ReactNode }) {
   const [isConnected, setIsConnected] = useState(false);
@@ -32,9 +42,8 @@ export function WebSocketProvider({ children }: { children: ReactNode }) {
 
       ws.onopen = () => {
         setIsConnected(true);
-        console.log('WebSocket connected');
         // Resubscribe to previous subscriptions
-        subscriptionsRef.current.forEach(jobId => {
+        subscriptionsRef.current.forEach((jobId) => {
           ws.send(JSON.stringify({ type: 'subscribe', jobId }));
         });
       };
@@ -46,14 +55,14 @@ export function WebSocketProvider({ children }: { children: ReactNode }) {
 
           switch (message.type) {
             case 'progress':
-              setJobProgress(prev => {
+              setJobProgress((prev) => {
                 const next = new Map(prev);
                 next.set(message.data.jobId, message.data);
                 return next;
               });
               break;
             case 'log':
-              setLogs(prev => [...prev.slice(-99), message.data]);
+              setLogs((prev) => [...prev.slice(-99), message.data]);
               break;
             case 'notification':
               // Handle notifications
@@ -66,7 +75,6 @@ export function WebSocketProvider({ children }: { children: ReactNode }) {
 
       ws.onclose = () => {
         setIsConnected(false);
-        console.log('WebSocket disconnected, reconnecting...');
         reconnectTimeoutRef.current = setTimeout(connect, 3000);
       };
 
@@ -102,7 +110,9 @@ export function WebSocketProvider({ children }: { children: ReactNode }) {
   }, []);
 
   return (
-    <WebSocketContext.Provider value={{ isConnected, lastMessage, jobProgress, logs, subscribe, unsubscribe }}>
+    <WebSocketContext.Provider
+      value={{ isConnected, lastMessage, jobProgress, logs, subscribe, unsubscribe }}
+    >
       {children}
     </WebSocketContext.Provider>
   );

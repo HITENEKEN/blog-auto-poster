@@ -12,6 +12,30 @@ import {
 
 const logger = getLogger('naver-api-hub');
 
+type NaverApiBlogItem = {
+  title: string;
+  link: string;
+  description: string;
+  bloggername: string;
+  bloggerlink: string;
+  postdate: string;
+};
+
+type NaverApiNewsItem = {
+  title: string;
+  link: string;
+  description: string;
+  pubDate: string;
+};
+
+type NaverApiSearchResponse<T = NaverApiBlogItem> = {
+  lastBuildDate?: string;
+  total: number;
+  start: number;
+  display: number;
+  items: T[];
+};
+
 // ============================================================================
 // Naver API Hub - Keyword Provider (신규)
 // 기존 NaverKeywordProvider(DataLab 방식)는 유지하고 별도로 구현
@@ -21,6 +45,8 @@ export class NaverApiHubKeywordProvider implements KeywordProvider {
   readonly name = 'naver-api-hub';
   private client: ReturnType<typeof createHttpClient>;
   private cache = getCache<KeywordData[]>('naver-api-hub-keywords');
+  private searchCache = getCache<NaverApiSearchResponse>('naver-api-hub-search');
+  private newsCache = getCache<NaverApiSearchResponse<NaverApiNewsItem>>('naver-api-hub-news');
   private apiKeyId: string;
   private apiKey: string;
 
@@ -73,7 +99,7 @@ export class NaverApiHubKeywordProvider implements KeywordProvider {
           metadata: {
             totalResults: blogResults.total,
             displayCount: blogResults.items?.length || 0,
-            topBlogs: blogResults.items?.slice(0, 5).map((item: any) => item.bloggername) || [],
+            topBlogs: blogResults.items?.slice(0, 5).map((item) => item.bloggername) || [],
           },
         };
 
@@ -90,13 +116,17 @@ export class NaverApiHubKeywordProvider implements KeywordProvider {
   /**
    * Search Naver blogs via API Hub
    */
-  async searchBlog(keyword: string, limit: number = 20, sort: string = 'sim'): Promise<any> {
+  async searchBlog(
+    keyword: string,
+    limit: number = 20,
+    sort: string = 'sim',
+  ): Promise<NaverApiSearchResponse> {
     const cacheKey = `blog:${keyword}:${limit}:${sort}`;
-    const cached = this.cache.get(cacheKey);
+    const cached = this.searchCache.get(cacheKey);
     if (cached) return cached;
 
     try {
-      const response = await this.client.get('/blog', {
+      const response = await this.client.get<NaverApiSearchResponse>('/blog', {
         params: {
           query: keyword,
           display: Math.min(limit, 100),
@@ -105,7 +135,7 @@ export class NaverApiHubKeywordProvider implements KeywordProvider {
         },
       });
 
-      this.cache.set(cacheKey, response.data, 3600); // 1h cache
+      this.searchCache.set(cacheKey, response.data, 3600); // 1h cache
       return response.data;
     } catch (error) {
       logger.error({ keyword, error: String(error) }, 'API Hub blog search failed');
@@ -116,13 +146,16 @@ export class NaverApiHubKeywordProvider implements KeywordProvider {
   /**
    * Search Naver news via API Hub (optional, for trend detection)
    */
-  async searchNews(keyword: string, limit: number = 10): Promise<any> {
+  async searchNews(
+    keyword: string,
+    limit: number = 10,
+  ): Promise<NaverApiSearchResponse<NaverApiNewsItem>> {
     const cacheKey = `news:${keyword}:${limit}`;
-    const cached = this.cache.get(cacheKey);
+    const cached = this.newsCache.get(cacheKey);
     if (cached) return cached;
 
     try {
-      const response = await this.client.get('/news', {
+      const response = await this.client.get<NaverApiSearchResponse<NaverApiNewsItem>>('/news', {
         params: {
           query: keyword,
           display: Math.min(limit, 100),
@@ -131,7 +164,7 @@ export class NaverApiHubKeywordProvider implements KeywordProvider {
         },
       });
 
-      this.cache.set(cacheKey, response.data, 1800); // 30min cache
+      this.newsCache.set(cacheKey, response.data, 1800); // 30min cache
       return response.data;
     } catch (error) {
       logger.error({ keyword, error: String(error) }, 'API Hub news search failed');
@@ -142,9 +175,29 @@ export class NaverApiHubKeywordProvider implements KeywordProvider {
   /**
    * Extract related keywords from blog search results (titles + descriptions)
    */
-  private extractRelatedKeywords(blogResults: any, seedKeyword: string): string[] {
+  private extractRelatedKeywords(
+    blogResults: NaverApiSearchResponse,
+    seedKeyword: string,
+  ): string[] {
     const words = new Map<string, number>();
-    const stopWords = new Set(['그리고', '하지만', '그러나', '때문에', '위해서', '대해서', '있습니다', '합니다', '입니다', '했습니다', '있는', '이런', '저런', '수가', '것을', seedKeyword]);
+    const stopWords = new Set([
+      '그리고',
+      '하지만',
+      '그러나',
+      '때문에',
+      '위해서',
+      '대해서',
+      '있습니다',
+      '합니다',
+      '입니다',
+      '했습니다',
+      '있는',
+      '이런',
+      '저런',
+      '수가',
+      '것을',
+      seedKeyword,
+    ]);
 
     for (const item of blogResults.items || []) {
       const text = `${item.title || ''} ${item.description || ''}`
@@ -169,7 +222,7 @@ export class NaverApiHubKeywordProvider implements KeywordProvider {
    * Estimate search volume based on total result count
    * More total results = higher interest/competition
    */
-  private estimateVolumeFromResults(blogResults: any): number {
+  private estimateVolumeFromResults(blogResults: NaverApiSearchResponse): number {
     const total = blogResults.total || 0;
     // Normalize: log scale to prevent extreme values
     if (total === 0) return 0;
@@ -180,7 +233,7 @@ export class NaverApiHubKeywordProvider implements KeywordProvider {
   /**
    * Calculate competition score (0-1) based on recent post density
    */
-  private calculateCompetition(blogResults: any): number {
+  private calculateCompetition(blogResults: NaverApiSearchResponse): number {
     const items = blogResults.items || [];
     if (items.length === 0) return 1;
 
@@ -208,7 +261,7 @@ export class NaverApiHubKeywordProvider implements KeywordProvider {
   /**
    * Calculate trend based on post recency distribution
    */
-  private calculateTrend(blogResults: any): 'rising' | 'falling' | 'stable' {
+  private calculateTrend(blogResults: NaverApiSearchResponse): 'rising' | 'falling' | 'stable' {
     const items = blogResults.items || [];
     if (items.length < 4) return 'stable';
 
@@ -225,7 +278,7 @@ export class NaverApiHubKeywordProvider implements KeywordProvider {
       const d = new Date(
         parseInt(dateStr.substring(0, 4)),
         parseInt(dateStr.substring(4, 6)) - 1,
-        parseInt(dateStr.substring(6, 8))
+        parseInt(dateStr.substring(6, 8)),
       );
       if (d >= threeMonthsAgo) recent++;
       else if (d >= nineMonthsAgo && d < threeMonthsAgo) older++;
@@ -276,7 +329,11 @@ export class NaverApiHubBlogAnalyzer implements CompetitorAnalyzer {
     });
   }
 
-  async analyze(keyword: string, platforms: string[] = ['naver-blog-hub'], limit: number = 10): Promise<CompetitorPost[]> {
+  async analyze(
+    keyword: string,
+    platforms: string[] = ['naver-blog-hub'],
+    limit: number = 10,
+  ): Promise<CompetitorPost[]> {
     if (!platforms.includes('naver-blog-hub')) return [];
 
     const cacheKey = `analyze:${keyword}:${limit}`;
@@ -284,7 +341,7 @@ export class NaverApiHubBlogAnalyzer implements CompetitorAnalyzer {
     if (cached) return cached;
 
     try {
-      const response = await this.client.get('/blog', {
+      const response = await this.client.get<NaverApiSearchResponse>('/blog', {
         params: {
           query: keyword,
           display: Math.min(limit, 100),
@@ -293,24 +350,25 @@ export class NaverApiHubBlogAnalyzer implements CompetitorAnalyzer {
         },
       });
 
-      const posts: CompetitorPost[] = response.data.items?.map((item: any, index: number) => ({
-        platform: 'naver-blog',
-        url: item.link,
-        title: this.stripHtml(item.title),
-        excerpt: this.stripHtml(item.description || ''),
-        views: 0,
-        likes: 0,
-        publishedAt: item.postdate || '',
-        author: item.bloggername || '',
-        structure: [],
-        affiliateLinks: [],
-        ctaPatterns: [],
-        score: this.calculateScore(index, limit),
-        metadata: {
-          bloggerlink: item.bloggerlink || '',
-          postdate: item.postdate || '',
-        },
-      })) || [];
+      const posts: CompetitorPost[] =
+        response.data.items?.map((item, index) => ({
+          platform: 'naver-blog',
+          url: item.link,
+          title: this.stripHtml(item.title),
+          excerpt: this.stripHtml(item.description || ''),
+          views: 0,
+          likes: 0,
+          publishedAt: item.postdate || '',
+          author: item.bloggername || '',
+          structure: [],
+          affiliateLinks: [],
+          ctaPatterns: [],
+          score: this.calculateScore(index, limit),
+          metadata: {
+            bloggerlink: item.bloggerlink || '',
+            postdate: item.postdate || '',
+          },
+        })) || [];
 
       // Enrich top posts with content analysis
       for (const post of posts.slice(0, 5)) {
@@ -332,10 +390,12 @@ export class NaverApiHubBlogAnalyzer implements CompetitorAnalyzer {
       const $ = cheerio.load(response.data);
 
       // Extract headings structure
-      const headings = $('h1, h2, h3, h4').map((_, el) => ({
-        level: parseInt(((el as any).tagName || '').charAt(1)) || 1,
-        text: $(el).text().trim(),
-      })).get();
+      const headings = $('h1, h2, h3, h4')
+        .map((_, el) => ({
+          level: parseInt(('tagName' in el ? el.tagName : '').charAt(1)) || 1,
+          text: $(el).text().trim(),
+        }))
+        .get();
 
       post.structure = headings;
 
@@ -343,13 +403,18 @@ export class NaverApiHubBlogAnalyzer implements CompetitorAnalyzer {
       post.metadata = { ...post.metadata, imageCount: $('img').length };
 
       // Find affiliate links
-      const affiliateLinks = $('a[href*="coupang"], a[href*="link.coupang"], a[href*="partners"]').map((_, el) => $(el).attr('href')).get();
+      const affiliateLinks = $('a[href*="coupang"], a[href*="link.coupang"], a[href*="partners"]')
+        .map((_, el) => $(el).attr('href'))
+        .get();
       post.affiliateLinks = affiliateLinks.filter(Boolean) as string[];
 
       // Extract CTA patterns
-      const ctaTexts = $('a, button').map((_, el) => $(el).text().trim()).get();
-      post.ctaPatterns = ctaTexts.filter(t => /구매|확인|자세히|더보기|최저가|할인/.test(t)).slice(0, 5);
-
+      const ctaTexts = $('a, button')
+        .map((_, el) => $(el).text().trim())
+        .get();
+      post.ctaPatterns = ctaTexts
+        .filter((t) => /구매|확인|자세히|더보기|최저가|할인/.test(t))
+        .slice(0, 5);
     } catch (error) {
       logger.warn({ url: post.url, error: String(error) }, 'Failed to enrich post via API Hub');
     }

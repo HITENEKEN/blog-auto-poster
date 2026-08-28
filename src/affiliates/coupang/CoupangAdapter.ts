@@ -8,7 +8,12 @@ import {
   AffiliateSearchOptions,
   AffiliateSearchResult,
 } from '@core/interfaces';
-import { AffiliateError, AuthenticationError, RateLimitError, isRetryableError, getRetryDelay } from '@core/errors';
+import {
+  AffiliateError,
+  AuthenticationError,
+  RateLimitError,
+  isRetryableError,
+} from '@core/errors';
 
 const logger = getLogger('coupang-adapter');
 
@@ -149,7 +154,7 @@ export class CoupangAdapter implements AffiliateAdapter {
       throw new AuthenticationError(
         'Coupang API key and secret required for initial token',
         'coupang',
-        'api_key'
+        'api_key',
       );
     }
 
@@ -178,7 +183,7 @@ export class CoupangAdapter implements AffiliateAdapter {
         'AUTHENTICATION_FAILED',
         401,
         { originalError: String(error) },
-        error instanceof Error ? error : undefined
+        error instanceof Error ? error : undefined,
       );
     }
   }
@@ -188,7 +193,7 @@ export class CoupangAdapter implements AffiliateAdapter {
       throw new AuthenticationError(
         'Refresh token, API key, and secret required for token refresh',
         'coupang',
-        'refresh'
+        'refresh',
       );
     }
 
@@ -218,7 +223,7 @@ export class CoupangAdapter implements AffiliateAdapter {
         'AUTHENTICATION_FAILED',
         401,
         { originalError: String(error) },
-        error instanceof Error ? error : undefined
+        error instanceof Error ? error : undefined,
       );
     }
   }
@@ -275,7 +280,7 @@ export class CoupangAdapter implements AffiliateAdapter {
 
       const response = await this.client.get<CoupangProductSearchResponse>(
         `/${COUPANG_API_VERSION}/affiliate/products/search`,
-        { params }
+        { params },
       );
 
       if (response.data.code !== 'SUCCESS') {
@@ -317,7 +322,7 @@ export class CoupangAdapter implements AffiliateAdapter {
 
     try {
       const response = await this.client.get<CoupangProductDetailResponse>(
-        `/${COUPANG_API_VERSION}/affiliate/products/${productId}`
+        `/${COUPANG_API_VERSION}/affiliate/products/${productId}`,
       );
 
       if (response.data.code !== 'SUCCESS') {
@@ -352,7 +357,7 @@ export class CoupangAdapter implements AffiliateAdapter {
 
       const response = await this.client.get<CoupangTrackingUrlResponse>(
         `/${COUPANG_API_VERSION}/affiliate/tracking-url`,
-        { params }
+        { params },
       );
 
       if (response.data.code !== 'SUCCESS') {
@@ -386,7 +391,7 @@ export class CoupangAdapter implements AffiliateAdapter {
     try {
       const response = await this.client.get<CoupangCommissionResponse>(
         `/${COUPANG_API_VERSION}/affiliate/commissions`,
-        { params: { categoryId } }
+        { params: { categoryId } },
       );
 
       if (response.data.code !== 'SUCCESS') {
@@ -449,7 +454,11 @@ export class CoupangAdapter implements AffiliateAdapter {
   }
 
   private handleError(error: unknown, operation: string): Error {
-    if (error instanceof AffiliateError || error instanceof AuthenticationError || error instanceof RateLimitError) {
+    if (
+      error instanceof AffiliateError ||
+      error instanceof AuthenticationError ||
+      error instanceof RateLimitError
+    ) {
       throw error;
     }
 
@@ -468,7 +477,7 @@ export class CoupangAdapter implements AffiliateAdapter {
           502,
           true,
           { operation, originalError: error.message },
-          error
+          error,
         );
       }
     }
@@ -480,7 +489,7 @@ export class CoupangAdapter implements AffiliateAdapter {
       502,
       false,
       { operation, originalError: String(error) },
-      error instanceof Error ? error : undefined
+      error instanceof Error ? error : undefined,
     );
   }
 }

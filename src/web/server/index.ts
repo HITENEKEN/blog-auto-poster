@@ -1,13 +1,15 @@
-// @ts-nocheck
 import Fastify, { FastifyInstance } from 'fastify';
-import { getConfigManager, getLogger } from '@core';
-import { getAffiliateRegistry } from '@affiliates';
+import { getConfigManager, getLogger } from '@core/index';
+import { getAffiliateRegistry } from '@affiliates/index';
 import { getPlatformRegistry } from '@platforms';
 import { createJobQueue } from '@scheduler/JobQueue';
 import { createCronScheduler } from '@scheduler/CronScheduler';
-import { createKeywordResearcher } from '@intelligence/KeywordResearcher';
-import { createCompetitorAnalyzerRegistry } from '@intelligence/CompetitorAnalyzer';
-import { createTopicSelector } from '@intelligence/TopicSelector';
+import type {
+  AppConfig,
+  AffiliateConfig,
+  PlatformCredentials,
+  SchedulerConfig,
+} from '@core/interfaces';
 import { registerRoutes } from './routes';
 import { authMiddleware } from './middleware/auth';
 import * as path from 'path';
@@ -22,22 +24,25 @@ export interface WebServerOptions {
 }
 
 export async function createWebServer(options: WebServerOptions): Promise<FastifyInstance> {
-  const { configDir, env, port, host } = options;
+  const { configDir, env } = options;
 
   // Initialize config
   const configManager = getConfigManager(configDir, env);
   await configManager.load();
 
   const appConfig = configManager.getAll();
-  const webConfig = appConfig.web || {};
+  const webConfig = (appConfig.web || {}) as AppConfig['web'];
 
   // Initialize services
   const affiliateRegistry = getAffiliateRegistry();
-  const affiliateConfigs = appConfig.affiliates || {};
+  const affiliateConfigs = (appConfig.affiliates || {}) as Record<
+    string,
+    AffiliateConfig & { enabled?: boolean }
+  >;
   for (const [name, config] of Object.entries(affiliateConfigs)) {
-    if ((config as any).enabled) {
+    if (config.enabled) {
       try {
-        await affiliateRegistry.initialize(name, config as any);
+        await affiliateRegistry.initialize(name, config);
       } catch (error) {
         logger.warn({ name, error: String(error) }, 'Failed to initialize affiliate adapter');
       }
@@ -45,23 +50,21 @@ export async function createWebServer(options: WebServerOptions): Promise<Fastif
   }
 
   const platformRegistry = getPlatformRegistry();
-  const platformConfigs = appConfig.platforms || {};
+  const platformConfigs = (appConfig.platforms || {}) as Record<string, PlatformCredentials>;
   for (const [name, config] of Object.entries(platformConfigs)) {
-    if ((config as any).enabled) {
+    if (config.enabled) {
       try {
-        await platformRegistry.initialize(name, config as any);
+        await platformRegistry.initialize(name, config);
       } catch (error) {
         logger.warn({ name, error: String(error) }, 'Failed to initialize platform adapter');
       }
     }
   }
 
-  const jobQueue = createJobQueue('./data/jobs.sqlite', {
-    maxConcurrentJobs: appConfig.jobQueue?.maxConcurrentJobs || 3,
-  });
+  const jobQueue = createJobQueue('./data/jobs.sqlite');
 
-  const schedulerConfig = appConfig.scheduler || { enabled: false, jobs: [] };
-  const scheduler = createCronScheduler({ jobQueue, config: schedulerConfig as any });
+  const schedulerConfig = (appConfig.scheduler || { enabled: false, jobs: [] }) as SchedulerConfig;
+  const scheduler = createCronScheduler({ jobQueue, config: schedulerConfig });
 
   if (schedulerConfig.enabled) {
     scheduler.start();
@@ -73,18 +76,38 @@ export async function createWebServer(options: WebServerOptions): Promise<Fastif
     ajv: {
       customOptions: {
         removeAdditional: 'all',
-        coerceTypes: 'array',
+        coerceTypes: 'array' as const,
       },
     },
   });
 
-  // Register plugins
   await app.register(import('@fastify/cors'), {
-    origin: webConfig.cors?.origin || '*',
-    credentials: webConfig.cors?.credentials || true,
+    origin: (origin, cb) => {
+      const allowedOrigins =
+        webConfig.cors?.origin === '*'
+          ? [
+              'http://localhost:5173',
+              'http://localhost:3002',
+              'http://127.0.0.1:3002',
+              'http://127.0.0.1:5173',
+            ]
+          : (Array.isArray(webConfig.cors?.origin)
+              ? webConfig.cors.origin
+              : [webConfig.cors?.origin]
+            ).filter(Boolean);
+      if (!origin || allowedOrigins.includes(origin)) {
+        cb(null, true);
+      } else {
+        cb(new Error('CORS not allowed'), false);
+      }
+    },
+    credentials: true,
   });
 
   await app.register(import('@fastify/rate-limit'), {
+    // Global limiting disabled: dashboard/Coupang polling + static assets must not
+    // count against the limit. Only routes opting in (login) are rate limited.
+    global: false,
     max: webConfig.rateLimit?.maxRequests || 100,
     timeWindow: webConfig.rateLimit?.windowMs || 900000,
   });
@@ -119,7 +142,7 @@ export async function createWebServer(options: WebServerOptions): Promise<Fastif
   });
 
   // Auth middleware
-  await app.register(authMiddleware);
+  await app.register(authMiddleware, { configManager });
 
   // Register API routes
   await registerRoutes(app, {
