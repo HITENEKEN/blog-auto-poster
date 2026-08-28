@@ -30,6 +30,7 @@ import { savePostFiles, readPostFiles, listDrafts, type PostFileMeta } from '@co
 import * as fs from 'fs';
 import * as path from 'path';
 import * as yaml from 'js-yaml';
+import { sortByPostdateDesc } from '../../../intelligence/NaverApiHubProvider';
 
 const logger = getLogger('api-routes');
 
@@ -380,16 +381,21 @@ export async function registerRoutes(app: FastifyInstance, context: RouteContext
       const results = await provider.research([q.trim()], { limit: parseInt(limit) });
       const blogData = await provider.searchBlog(q.trim(), parseInt(limit));
 
-      return {
-        trending: results,
-        totalResults: blogData.total || 0,
-        blogs: (blogData.items || []).slice(0, 10).map((item) => ({
+      // 경쟁 블로그 목록을 최근 게시일 기준 내림차순으로 정렬
+      const blogs = sortByPostdateDesc(
+        (blogData.items || []).slice(0, 10).map((item) => ({
           title: item.title?.replace(/<[^>]*>/g, '') || '',
           link: item.link,
           bloggername: item.bloggername,
           postdate: item.postdate,
           description: item.description?.replace(/<[^>]*>/g, '').substring(0, 200),
         })),
+      );
+
+      return {
+        trending: results,
+        totalResults: blogData.total || 0,
+        blogs,
         searchedAt: new Date().toISOString(),
         source: 'naver-api-hub',
       };

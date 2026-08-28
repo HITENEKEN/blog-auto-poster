@@ -233,6 +233,22 @@ function normalizeKeywordToken(raw: string): string | null {
 // 기존 NaverKeywordProvider(DataLab 방식)는 유지하고 별도로 구현
 // ============================================================================
 
+/**
+ * 블로그 검색 결과를 게시일(postdate, YYYYMMDD) 기준 내림차순으로 정렬한다.
+ * 게시일이 유효한 항목(YYYYMMDD)이 최신순으로 앞에 오고, 게시일이 없거나
+ * 형식이 잘못된 항목은 상대 순서를 유지한 채 목록 맨 뒤로 보낸다.
+ */
+export function sortByPostdateDesc<T extends { postdate?: string }>(items: T[]): T[] {
+  return [...items].sort((a, b) => {
+    const aValid = /^\d{8}$/.test(a.postdate ?? '');
+    const bValid = /^\d{8}$/.test(b.postdate ?? '');
+    if (aValid && bValid) return (b.postdate ?? '').localeCompare(a.postdate ?? '');
+    if (aValid) return -1;
+    if (bValid) return 1;
+    return 0; // 둘 다 무효면 안정 정렬로 원래 순서 유지
+  });
+}
+
 export class NaverApiHubKeywordProvider implements KeywordProvider {
   readonly name = 'naver-api-hub';
   private client: ReturnType<typeof createHttpClient>;
