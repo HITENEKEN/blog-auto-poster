@@ -41,6 +41,7 @@ interface SettingsData {
       password: string;
       clientId: string;
       clientSecret: string;
+      accessToken: string;
     };
   };
   imageProviders: {
@@ -63,7 +64,14 @@ const defaultSettings: SettingsData = {
     tistory: { blogName: '', username: '', apiKey: '' },
     wordpress: { url: '', username: '', appPassword: '' },
     youtube: { clientId: '', clientSecret: '' },
-    naver: { blogId: '', username: '', password: '', clientId: '', clientSecret: '' },
+    naver: {
+      blogId: '',
+      username: '',
+      password: '',
+      clientId: '',
+      clientSecret: '',
+      accessToken: '',
+    },
   },
   imageProviders: {
     dalle: { apiKey: '', model: 'dall-e-3' },
@@ -132,6 +140,7 @@ interface ServerConfig {
       password?: string;
       clientId?: string;
       clientSecret?: string;
+      accessToken?: string;
     };
   };
   llm?: { provider?: string; apiKey?: string; model?: string; baseUrl?: string };
@@ -185,6 +194,10 @@ function hydrateFromConfig(cfg: ServerConfig | undefined, base: SettingsData): S
       password: p.naver.password ?? '',
       clientId: p.naver.clientId ?? '',
       clientSecret: p.naver.clientSecret ?? '',
+      // '***' 센티널 왕복: GET /api/config는 설정된 토큰을 '***'로 마스킹해 내려온다.
+      // 마스킹 값을 그대로 상태에 두어 저장 시 PUT accessToken='***'가 되고,
+      // mergeConfig는 '***'를 스킵하므로 저장된 토큰이 보존된다.
+      accessToken: p.naver.accessToken && p.naver.accessToken !== '' ? '***' : '',
     };
   const ip = cfg?.imageProviders || {};
   if (ip.dalle)
@@ -539,6 +552,16 @@ export default function Settings() {
               {renderInput('platforms.naver', 'password', '비밀번호', 'password')}
               {renderInput('platforms.naver', 'clientId', 'Client ID', 'text')}
               {renderInput('platforms.naver', 'clientSecret', 'Client Secret', 'password')}
+              {renderInput('platforms.naver', 'accessToken', 'Access Token', 'password')}
+              {settings.platforms.naver.accessToken === '***' && (
+                <p className="mt-1 text-xs text-muted-foreground">
+                  저장된 토큰이 있습니다(변경 시에만 새 토큰 입력)
+                </p>
+              )}
+              <p className="col-span-full text-xs text-muted-foreground">
+                게시에는 Naver Developers 앱에 &lsquo;블로그&rsquo; API 권한이 포함된 네이버 로그인
+                OAuth 접근 토큰이 필요합니다 (Client ID/Secret만으로는 게시할 수 없습니다).
+              </p>
             </CardContent>
           </Card>
           <Button onClick={() => handleSave('platforms')} disabled={saving === 'platforms'}>

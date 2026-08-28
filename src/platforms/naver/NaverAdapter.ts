@@ -41,13 +41,62 @@ interface NaverCategoryResponse {
  *
  * Auth model:
  *  - Application credentials: clientId / clientSecret (Naver Developers app, blog write scope)
- *  - User credential: accessToken (Naver Login OAuth token granted with blog write scope)
+ *  - User credential: accessToken (Naver Login OAuth token granted with blog write scope),
+ *    sent as the `Authorization: Bearer {accessToken}` header per the OpenAPI spec
  *  - Target: blogId (the Naver blog id to post to)
  *
  * Credentials are read from `configManager.getPlatformConfig('naver')` so the
  * adapter works both when initialized at startup and when called directly from
  * routes (e.g. /api/blogs, /api/posts/:id/publish) without a prior initialize().
  */
+
+/**
+ * Assemble the form body for the Naver Blog OpenAPI write endpoint
+ * (POST /blog/writePost.json). Pure function so the param shape can be unit-tested.
+ *
+ * Auth is carried entirely in headers (see buildNaverWriteHeaders) — the
+ * access token is deliberately NOT a form param.
+ */
+export function buildNaverWriteParams(
+  content: Partial<PlatformPostContent>,
+  opts: { blogId: string; postId?: string },
+): URLSearchParams {
+  const params = new URLSearchParams();
+  params.append('blog_id', opts.blogId);
+  if (opts.postId != null) params.append('postId', opts.postId);
+  if (content.title) params.append('title', content.title);
+  if (content.content) params.append('contents', content.content);
+  if (content.categoryId) params.append('category', String(content.categoryId));
+  if (content.tags && content.tags.length > 0) {
+    params.append('tag', content.tags.join(','));
+  }
+  if (content.visibility != null || opts.postId == null) {
+    params.append('secret', content.visibility === 'private' ? 'Y' : 'N');
+  }
+  if (opts.postId == null) {
+    params.append('accept_comment', content.allowComments === false ? 'N' : 'Y');
+  }
+  return params;
+}
+
+/**
+ * Headers for the Naver Blog OpenAPI write endpoint. The OAuth access token
+ * goes in the Authorization Bearer header, alongside the static application
+ * credentials.
+ */
+export function buildNaverWriteHeaders(
+  accessToken: string,
+  clientId: string,
+  clientSecret: string,
+): Record<string, string> {
+  return {
+    Authorization: `Bearer ${accessToken}`,
+    'X-Naver-Client-Id': clientId,
+    'X-Naver-Client-Secret': clientSecret,
+    'Content-Type': 'application/x-www-form-urlencoded',
+  };
+}
+
 export class NaverAdapter implements PlatformAdapter {
   readonly name = 'naver';
   readonly supportedFeatures: PlatformFeature[] = ['categories', 'tags', 'seo_fields'];
@@ -119,30 +168,13 @@ export class NaverAdapter implements PlatformAdapter {
       );
     }
 
-    const params = new URLSearchParams();
-    params.append('access_token', accessToken);
-    params.append('blog_id', blogId);
-    params.append('title', content.title);
-    params.append('contents', content.content);
-    if (content.categoryId) {
-      params.append('category', String(content.categoryId));
-    }
-    if (content.tags && content.tags.length > 0) {
-      params.append('tag', content.tags.join(','));
-    }
-    params.append('secret', content.visibility === 'private' ? 'Y' : 'N');
-    params.append('accept_comment', content.allowComments === false ? 'N' : 'Y');
-
+    const params = buildNaverWriteParams(content, { blogId });
     try {
       const response = await this.client.post<NaverWriteResponse>(
-        '/blog/write',
+        '/blog/writePost.json',
         params.toString(),
         {
-          headers: {
-            'X-Naver-Client-Id': clientId,
-            'X-Naver-Client-Secret': clientSecret,
-            'Content-Type': 'application/x-www-form-urlencoded',
-          },
+          headers: buildNaverWriteHeaders(accessToken, clientId, clientSecret),
         },
       );
 
@@ -207,26 +239,13 @@ export class NaverAdapter implements PlatformAdapter {
       );
     }
 
-    const params = new URLSearchParams();
-    params.append('access_token', accessToken);
-    params.append('blog_id', blogId);
-    params.append('postId', postId);
-    if (content.title) params.append('title', content.title);
-    if (content.content) params.append('contents', content.content);
-    if (content.categoryId) params.append('category', String(content.categoryId));
-    if (content.tags) params.append('tag', content.tags.join(','));
-    if (content.visibility) params.append('secret', content.visibility === 'private' ? 'Y' : 'N');
-
+    const params = buildNaverWriteParams(content, { blogId, postId });
     try {
       const response = await this.client.post<NaverWriteResponse>(
-        '/blog/write',
+        '/blog/writePost.json',
         params.toString(),
         {
-          headers: {
-            'X-Naver-Client-Id': clientId,
-            'X-Naver-Client-Secret': clientSecret,
-            'Content-Type': 'application/x-www-form-urlencoded',
-          },
+          headers: buildNaverWriteHeaders(accessToken, clientId, clientSecret),
         },
       );
       const data = response.data;
