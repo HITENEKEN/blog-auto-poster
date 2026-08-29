@@ -38,6 +38,14 @@ describe('extractNaverPostId', () => {
     ).toBe('223456789012');
   });
 
+  it('extracts logNo from the PostView.naver redirect form', () => {
+    expect(
+      extractNaverPostId(
+        'https://blog.naver.com/PostView.naver?blogId=myblog&Redirect=View&logNo=224394017200&categoryNo=1&isAfterWrite=true',
+      ),
+    ).toBe('224394017200');
+  });
+
   it('returns null for non-post URLs', () => {
     expect(extractNaverPostId('https://blog.naver.com/myblog/postwrite')).toBeNull();
     expect(extractNaverPostId('https://blog.naver.com/myblog')).toBeNull();

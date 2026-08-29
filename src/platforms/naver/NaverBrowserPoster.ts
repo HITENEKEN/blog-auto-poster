@@ -36,8 +36,13 @@ export function resolveNaverProfileDir(cwd: string = process.cwd()): string {
  * match (query strings and fragments tolerated).
  */
 export function extractNaverPostId(url: string): string | null {
-  const m = /blog\.naver\.com\/[^/?#]+\/(\d+)/.exec(url);
-  return m ? m[1] : null;
+  const pathForm = /blog\.naver\.com\/[^/?#]+\/(\d+)/.exec(url);
+  if (pathForm) return pathForm[1];
+  // 2025+ postwrite redirects to PostView.naver?blogId=…&logNo=… after publish.
+  const queryForm = /blog\.naver\.com\/PostView\.naver\?[^#]*blogId=[^#&]+[^#]*logNo=(\d+)/.exec(
+    url,
+  );
+  return queryForm ? queryForm[1] : null;
 }
 
 // ---------------------------------------------------------------------------
@@ -316,7 +321,9 @@ export async function postToNaverBlog(
   const deadline = Date.now() + OVERALL_TIMEOUT_MS;
   const remaining = () => Math.max(5_000, deadline - Date.now());
   const blogId = opts.blogId;
-  const postUrlPattern = new RegExp(`blog\\.naver\\.com\\/${blogId}\\/\\d+`);
+  const postUrlPattern = new RegExp(
+    `blog\\.naver\\.com\\/(?:${blogId}\\/\\d+|PostView\\.naver\\?[^#]*logNo=\\d+)`,
+  );
 
   const context = await chromium.launchPersistentContext(profileDir, {
     headless: opts.headless,
