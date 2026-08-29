@@ -50,14 +50,19 @@ export const LOGIN_REQUIRED_MESSAGE =
   '네이버 로그인이 필요합니다. `npm run naver:login`을 먼저 실행하세요.';
 
 const TITLE_SELECTORS = [
+  // 2025+ postwrite: title is a plain div module (no contenteditable); typing
+  // goes through keyboard events after clicking it.
+  '.se-section-documentTitle .se-module-text',
   '#title_input',
   'input[placeholder*="제목"]',
   'textarea[placeholder*="제목"]',
   '.se-section-documentTitle div[contenteditable="true"]',
   'div.se-documentTitle [contenteditable="true"]',
 ];
-
 const BODY_SELECTORS = [
+  // 2025+ postwrite: body text module; content is delivered via the paste
+  // pipeline of the hidden input_buffer iframe (see fill-body below).
+  '.se-section-text .se-module-text',
   '.se-section-text div[contenteditable="true"]',
   '.se-main-container div[contenteditable="true"]',
   'div.se-component-content[contenteditable="true"]',
@@ -94,7 +99,13 @@ const PRIVATE_SELECTORS = [
 ];
 
 const PUBLISH_SELECTORS = [
-  'button:has-text("발행")',
+  // 2025+ postwrite: the settings modal's confirm button (invisible until the
+  // modal opens, so the initial 발행 click still resolves to publish_btn).
+  'button[class*="confirm_btn"]',
+  // Top toolbar publish button (hashed class in the 2025+ editor).
+  'button[class*="publish_btn"]',
+  // Exact text match avoids the separate "예약 발행" (schedule) button.
+  'button:text-is("발행")',
   'a:has-text("발행")',
   '.btn_publish',
   'button[type="submit"]:has-text("발행")',
@@ -107,6 +118,23 @@ const DISMISS_SELECTORS = [
   'button[aria-label="닫기"]',
   '.se-toaster-close',
 ];
+
+/**
+ * Browser-side DOM surface used to paste HTML into the 2025+ postwrite
+ * editor's hidden input_buffer frame. Named shim: the server tsconfig has no
+ * DOM lib, so the well-known frame-global shape is declared explicitly.
+ */
+interface BufferFrameGlobals {
+  DataTransfer: new () => { setData(type: string, value: string): void };
+  ClipboardEvent: new (
+    type: string,
+    init?: { clipboardData?: unknown; bubbles?: boolean; cancelable?: boolean },
+  ) => unknown;
+  document: {
+    body: { dispatchEvent(event: unknown): boolean };
+    activeElement: { dispatchEvent(event: unknown): boolean } | null;
+  };
+}
 
 const OVERALL_TIMEOUT_MS = 120_000;
 const DEBUG_DIR = 'output/naver-debug';
@@ -205,21 +233,59 @@ async function findEditorFrame(page: Page, timeoutMs: number): Promise<Frame> {
   }
 }
 
-async function dismissPopups(page: Page): Promise<void> {
+/** Click the first visible dismissal control, if any. Returns true when one was clicked. */
+async function dismissOnePopup(page: Page): Promise<boolean> {
   for (const sel of DISMISS_SELECTORS) {
     try {
       const loc = page.locator(sel).first();
       if (await loc.isVisible({ timeout: 250 })) {
         await loc.click({ timeout: 1000 });
+        return true;
       }
     } catch {
       // nothing to dismiss
     }
   }
+  return false;
 }
 
-// ---------------------------------------------------------------------------
-// Public entry point
+async function dismissPopups(page: Page): Promise<void> {
+  // Popup layers (draft recovery, help panels) appear asynchronously a few
+  // seconds after postwrite loads, so sweep until a round finds nothing.
+  for (let round = 0; round < 4; round++) {
+    if (!(await dismissOnePopup(page))) return;
+    await delay(500);
+  }
+}
+
+/**
+ * Click a locator, dismissing alert popup layers that intercept the pointer.
+ * Recovery dialogs load after the initial dismiss-popups step, so the steps
+ * that click the editor must tolerate and clear them mid-flight. If the
+ * pointer click still fails (transient toast layers can cover a button
+ * without any dismissible ancestor), fall back to a DOM click on the element,
+ * which bypasses hit-testing.
+ */
+async function clickDismissingPopups(page: Page, loc: Locator, timeoutMs: number): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  let useDomClick = false;
+  for (;;) {
+    if (useDomClick) {
+      await loc.evaluate((el: { click(): void }) => el.click());
+      return;
+    }
+    try {
+      await loc.click({ timeout: 2_500 });
+      return;
+    } catch (error) {
+      const dismissed = await dismissOnePopup(page);
+      if (dismissed) continue;
+      if (Date.now() >= deadline) throw error;
+      useDomClick = true;
+    }
+  }
+}
+
 // ---------------------------------------------------------------------------
 
 export interface NaverBrowserPostOptions {
@@ -306,7 +372,7 @@ export async function postToNaverBlog(
       if (tag === 'input' || tag === 'textarea') {
         await title.fill(opts.title);
       } else {
-        await title.click();
+        await clickDismissingPopups(page!, title, Math.min(10_000, remaining()));
         await page!.keyboard.insertText(opts.title);
       }
     });
@@ -328,33 +394,56 @@ export async function postToNaverBlog(
       if (!bodyFilled) {
         const body = await firstVisible(editor!, BODY_SELECTORS, Math.min(15_000, remaining()));
         if (!body) throw new Error(`no editor body matched: ${BODY_SELECTORS.join(', ')}`);
-        const handle = await body.elementHandle();
-        if (!handle) throw new Error('editor body element handle unavailable');
-        // The server tsconfig has no DOM lib; these shims type the browser-side
-        // evaluation only. At runtime the code executes inside the page.
-        interface EditorElement {
-          focus(): void;
-          innerHTML: string;
-          dispatchEvent(event: unknown): boolean;
+        // 2025+ postwrite: clicking the text module moves focus into a hidden
+        // contenteditable inside an `input_buffer` iframe; the HTML must be
+        // delivered through that frame's paste pipeline. Validated live: the
+        // editor consumes the ClipboardEvent and renders text modules.
+        await clickDismissingPopups(page!, body, 8_000);
+        await page!.waitForTimeout(300);
+        const buffer = page!.frames().find((f) => f.name().startsWith('input_buffer'));
+        if (buffer) {
+          // The server tsconfig has no DOM lib; shims type the browser-side
+          // evaluation only. At runtime the code executes inside the frame.
+          await buffer.evaluate((html) => {
+            // Named shim (rule: no inline-cast member access); the shape is
+            // the well-known DOM surface of the frame, untypeable here because
+            // the server tsconfig has no DOM lib.
+            const g = globalThis as unknown as BufferFrameGlobals;
+            const dt = new g.DataTransfer();
+            dt.setData('text/html', html);
+            const target = g.document.activeElement ?? g.document.body;
+            target.dispatchEvent(
+              new g.ClipboardEvent('paste', { clipboardData: dt, bubbles: true, cancelable: true }),
+            );
+          }, opts.html);
+        } else {
+          // Legacy SmartEditor: focus + direct innerHTML injection.
+          const handle = await body.elementHandle();
+          if (!handle) throw new Error('editor body element handle unavailable');
+          interface EditorElement {
+            focus(): void;
+            innerHTML: string;
+            dispatchEvent(event: unknown): boolean;
+          }
+          interface EditorEventInit {
+            bubbles?: boolean;
+            cancelable?: boolean;
+          }
+          type InputEventCtor = new (type: string, init?: EditorEventInit) => unknown;
+          const InputEventImpl = (globalThis as unknown as { InputEvent: InputEventCtor })
+            .InputEvent;
+          await page!.evaluate((el) => {
+            const host = el as unknown as EditorElement;
+            host.focus();
+            host.innerHTML = '';
+            host.dispatchEvent(new InputEventImpl('input', { bubbles: true }));
+          }, handle);
+          await body.evaluate((el, html) => {
+            const host = el as unknown as EditorElement;
+            host.innerHTML = html;
+            host.dispatchEvent(new InputEventImpl('input', { bubbles: true, cancelable: true }));
+          }, opts.html);
         }
-        interface EditorEventInit {
-          bubbles?: boolean;
-          cancelable?: boolean;
-        }
-        type InputEventCtor = new (type: string, init?: EditorEventInit) => unknown;
-        const InputEventImpl = (globalThis as unknown as { InputEvent: InputEventCtor }).InputEvent;
-        await page!.evaluate((el) => {
-          const host = el as unknown as EditorElement;
-          host.focus();
-          host.innerHTML = '';
-          host.dispatchEvent(new InputEventImpl('input', { bubbles: true }));
-        }, handle);
-        // Insert HTML directly: the editor's input pipeline registers the content.
-        await body.evaluate((el, html) => {
-          const host = el as unknown as EditorElement;
-          host.innerHTML = html;
-          host.dispatchEvent(new InputEventImpl('input', { bubbles: true, cancelable: true }));
-        }, opts.html);
         bodyFilled = true;
       }
     });
@@ -379,7 +468,7 @@ export async function postToNaverBlog(
         Math.min(10_000, remaining()),
       );
       if (!publish) throw new Error(`no publish button matched: ${PUBLISH_SELECTORS.join(', ')}`);
-      await publish.click({ timeout: 5_000 });
+      await clickDismissingPopups(page!, publish, 6_000);
     });
 
     if (opts.visibility === 'private') {
@@ -403,7 +492,7 @@ export async function postToNaverBlog(
         Math.min(5_000, remaining()),
       );
       if (confirm) {
-        await confirm.click({ timeout: 5_000 }).catch(async () => {
+        await clickDismissingPopups(page!, confirm, 5_000).catch(() => {
           // The modal may have closed after the first click — tolerate it.
         });
       }
