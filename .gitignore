@@ -38,3 +38,5 @@ playwright-report/
 
 # Husky runtime
 .husky/_/
+# TypeScript build info
+*.tsbuildinfo

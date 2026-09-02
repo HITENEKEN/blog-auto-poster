@@ -41,29 +41,30 @@ jsonLd:
 
 <div class="cpr-wrap">
 <style>
-.cpr-wrap{max-width:760px;margin:0 auto;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI','Noto Sans KR',sans-serif;line-height:1.8;color:#333;padding:16px}
+.cpr-wrap{max-width:760px;margin:0 auto;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI','Noto Sans KR',sans-serif;font-size:1.05rem;line-height:2.0;color:#333;padding:16px}
+.cpr-section p{margin:0 0 16px}
 .cpr-summary{background:#f8f9fa;border-left:4px solid #343a40;padding:14px 18px;border-radius:6px;margin-bottom:24px;font-size:15px;color:#495057}
 .cpr-summary strong{color:#212529}
 .cpr-header h1{font-size:1.6rem;line-height:1.4;margin:0 0 8px;color:#212529}
 .cpr-meta{font-size:.85rem;color:#868e96;margin-bottom:20px}
 .cpr-meta span{margin-right:12px}
-.cpr-experience{background:#e7f1ff;border-left:4px solid #1e88e5;padding:14px 18px;border-radius:6px;margin-bottom:24px;font-size:15px;color:#1a3a5c;white-space:pre-line}
+.cpr-experience{background:#e7f1ff;border-left:5px solid #1e88e5;padding:16px 20px;border-radius:0 8px 8px 0;margin-bottom:24px;font-size:1.05rem;color:#1a3a5c;white-space:pre-line}
 .cpr-price-card{background:#fff;border:2px solid #e03131;border-radius:10px;padding:20px;text-align:center;margin-bottom:28px}
 .cpr-price{font-size:1.8rem;font-weight:700;color:#e03131}
 .cpr-original{font-size:1rem;color:#adb5bd;text-decoration:line-through;margin-left:8px}
 .cpr-discount{display:inline-block;background:#e03131;color:#fff;padding:2px 10px;border-radius:12px;font-size:.85rem;font-weight:600;margin-left:8px;vertical-align:middle}
 .cpr-cta-primary{display:block;background:#e03131;color:#fff;text-align:center;padding:14px;border-radius:8px;text-decoration:none;font-size:1.1rem;font-weight:700;margin-top:14px;transition:opacity .2s}
 .cpr-cta-primary:hover{opacity:.88}
-.cpr-section{margin-bottom:32px}
-.cpr-section h2{font-size:1.25rem;color:#212529;border-bottom:2px solid #e03131;padding-bottom:8px;margin-bottom:16px}
-.cpr-section h3{font-size:1.05rem;color:#495057;margin:18px 0 10px}
+.cpr-section{margin-bottom:36px}
+.cpr-section h2{font-size:1.4rem;color:#212529;border-bottom:2px solid #e03131;padding-bottom:10px;margin-bottom:20px}
+.cpr-section h3{font-size:1.15rem;color:#495057;margin:22px 0 12px}
 .cpr-pctable{width:100%;border-collapse:collapse;margin-bottom:24px}
 .cpr-pctable th{padding:12px;font-size:1rem;text-align:center}
 .cpr-pctable th:first-child{color:#2b8a3e;background:#ebfbee;border-radius:8px 0 0 0}
 .cpr-pctable th:last-child{color:#c92a2a;background:#fff5f5;border-radius:0 8px 0 0}
-.cpr-pctable td{padding:12px 14px;vertical-align:top;border:1px solid #dee2e6;width:50%}
+.cpr-pctable td{padding:14px 16px;vertical-align:top;border:1px solid #dee2e6;width:50%}
 .cpr-pctable ul{margin:0;padding-left:18px}
-.cpr-pctable li{margin-bottom:6px;font-size:.95rem}
+.cpr-pctable li{margin-bottom:8px;font-size:.98rem}
 .cpr-img{max-width:100%;border-radius:8px;display:block;margin:12px auto}
 .cpr-specs{width:100%;border-collapse:collapse}
 .cpr-specs th{background:#f8f9fa;padding:10px 12px;text-align:left;font-weight:600;border:1px solid #dee2e6;width:35%}
@@ -76,9 +77,9 @@ jsonLd:
 .cpr-faq-a{color:#495057;font-size:.95rem}
 .cpr-audience li{margin-bottom:8px;font-size:.95rem}
 .cpr-tips{background:#fffde7;border-radius:8px;padding:14px 16px}
-.cpr-tips li{margin-bottom:8px;font-size:.95rem}
+.cpr-tips li{margin-bottom:10px;font-size:.98rem}
 .cpr-checklist{background:#e8f5e9;border-radius:8px;padding:14px 16px;list-style:none}
-.cpr-checklist li{margin-bottom:8px;font-size:.95rem}
+.cpr-checklist li{margin-bottom:10px;font-size:.98rem}
 .cpr-checklist li::before{content:"☐ "}
 .cpr-why{background:#f1f8e9;border-radius:8px;padding:14px 16px;font-size:15px;color:#33691e;white-space:pre-line}
 .cpr-benchmarks{background:#f7f7fb;border:1px solid #e0e0ef;border-radius:8px;padding:14px 16px}
@@ -92,6 +93,17 @@ jsonLd:
 .cpr-notice{margin-top:28px;padding-top:16px;border-top:1px solid #eee}
 .cpr-notice small{color:#adb5bd;font-size:.78rem}
 @media(max-width:600px){.cpr-wrap{padding:10px}.cpr-header h1{font-size:1.3rem}.cpr-price{font-size:1.4rem}.cpr-pctable th,.cpr-pctable td{font-size:.85rem}}
+.section-image{margin:28px 0}
+.section-image img{display:block;max-width:100%;border-radius:10px;box-shadow:0 4px 14px rgba(0,0,0,.12);margin:0 auto}
+.section-image figcaption{margin-top:10px;font-size:.88rem;color:#868e96;text-align:center}
+
+/* ── 스타일 고도화(공통, 이슈 #10): 더 화려한 발행물 ── */
+.cpr-section{background:#fff;border:1px solid #f1f3f5;border-radius:14px;padding:18px 20px;box-shadow:0 2px 10px rgba(0,0,0,.05)}
+.cpr-section h2{background:linear-gradient(90deg,#fff3bf,#ffe8cc);padding:8px 12px;border-radius:0 8px 8px 0}
+.cpr-wrap strong{background:linear-gradient(180deg,transparent 62%,#ffec99 62%)}
+.cpr-cta-primary{background:linear-gradient(135deg,#e8590c,#f76707);box-shadow:0 4px 12px rgba(232,89,12,.35)}
+.cpr-cta-large{background:linear-gradient(135deg,#e8590c,#e64980);box-shadow:0 4px 12px rgba(232,89,12,.35);letter-spacing:-.02em}
+.cpr-price-card{box-shadow:0 6px 18px rgba(232,89,12,.18)}
 </style>
 
 <div class="cpr-disclosure" style="font-size:.85rem;color:#868e96;margin:0 0 16px;">
@@ -161,6 +173,13 @@ jsonLd:
 {{/if}}
 </div>
 
+{{#if sectionImages.usage}}
+<figure class="section-image">
+<img src="{{sectionImages.usage}}" alt="제가 직접 써본 상세 후기" loading="lazy" />
+<figcaption>제가 직접 써본 상세 후기</figcaption>
+</figure>
+{{/if}}
+
 <!-- ⑥ 비교 표 -->
 {{#if comparisonTable}}
 <div class="cpr-section">
@@ -172,6 +191,13 @@ jsonLd:
 {{/each}}
 </table>
 </div>
+{{/if}}
+
+{{#if sectionImages.compare}}
+<figure class="section-image">
+<img src="{{sectionImages.compare}}" alt="경쟁 제품과 비교" loading="lazy" />
+<figcaption>경쟁 제품과 비교</figcaption>
+</figure>
 {{/if}}
 
 <!-- 인사이트: 검색/쇼핑 트렌드 (선택) -->
@@ -227,6 +253,13 @@ jsonLd:
 {{#each usageTips}}<li>{{this}}</li>{{/each}}
 </ul>
 </div>
+{{/if}}
+
+{{#if sectionImages.tips}}
+<figure class="section-image">
+<img src="{{sectionImages.tips}}" alt="실전 활용 팁" loading="lazy" />
+<figcaption>실전 활용 팁</figcaption>
+</figure>
 {{/if}}
 {{#if buyingChecklist}}
 <div class="cpr-section">

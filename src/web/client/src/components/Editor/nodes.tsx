@@ -6,6 +6,8 @@
  - HbsToken: inline chip for a Handlebars token that appeared as a text node
    (`<span data-hbs-token="{encodeURIComponent(token)}">`, see @shared/hbsConvert).
  - StyleBlock: block atom preserving a template/post inline `<style>` block.
+   The CSS is re-emitted verbatim on export, and applied to the live editor
+   content (scoped via scopeCss) for true WYSIWYG preview.
  - EditorImage / LinkMark: minimal img node + link mark (StarterKit has neither,
    and dropping them would destroy affiliate links and product images).
  - HtmlBlock / HtmlInline: pass-through containers that keep unknown
@@ -14,11 +16,14 @@
  */
 import { Node, Mark } from '@tiptap/core';
 import { COUPANG_WIDGET_LABELS } from '@shared/coupangWidgets';
+import { scopeCss } from '@shared/cssScope';
 
 export interface CoupangWidgetProps {
   url?: string;
   text?: string;
   snippet?: string;
+  /** 광고 배너(ad-banner): 배너 이미지 URL */
+  imageUrl?: string;
 }
 
 export interface WidgetClickPayload {
@@ -104,9 +109,13 @@ export const CoupangWidget = Node.create<CoupangWidgetOptions>({
       const label = document.createElement('span');
       label.className =
         'shrink-0 rounded bg-primary/15 px-1.5 py-0.5 text-xs font-semibold text-primary';
-
       const summary = document.createElement('span');
       summary.className = 'min-w-0 flex-1 truncate text-xs text-muted-foreground';
+
+      const thumb = document.createElement('img');
+      thumb.className =
+        'h-12 max-w-[160px] shrink-0 rounded border border-border bg-background object-contain';
+      thumb.alt = '';
 
       const hint = document.createElement('span');
       hint.className = 'shrink-0 text-[11px] text-muted-foreground/70';
@@ -123,8 +132,18 @@ export const CoupangWidget = Node.create<CoupangWidgetOptions>({
           (props.snippet ? `snippet: ${props.snippet.slice(0, 60)}` : '') ||
           '설정되지 않음';
         summary.textContent = detail;
+        if (kind === 'ad-banner' && props.imageUrl) {
+          thumb.src = props.imageUrl;
+          thumb.style.display = '';
+          summary.textContent = props.text ? detail : '설정되지 않음';
+        } else {
+          thumb.removeAttribute('src');
+          thumb.style.display = 'none';
+        }
         dom.title = `${label.textContent} 위젯 — ${CHIP_CLICK_HINT}`;
       };
+
+      dom.append(label, summary, thumb, hint);
       rerender();
 
       dom.addEventListener('click', (event) => {
@@ -258,20 +277,30 @@ export const StyleBlock = Node.create({
       dom.className =
         'my-3 flex items-center gap-2 rounded-md border bg-zinc-900 px-3 py-2.5 font-mono text-xs text-green-400';
 
-      const rerender = () => {
+      // WYSIWYG 미리보기: 블록 CSS를 에디터 콘텐츠에만 적용한다.
+      // scopeCss로 셀렉터를 .ProseMirror 하위로 한정해 문서 전역으로 새지 않게 한다.
+      const styleEl = document.createElement('style');
+      styleEl.dataset.styleBlockScope = 'prosemirror';
+      document.head.appendChild(styleEl);
+
+      const apply = () => {
         const css = String(current.attrs.css ?? '');
+        styleEl.textContent = scopeCss(css);
         const lines = css ? css.split('\n').length : 0;
-        dom.textContent = `CSS 스타일 블록 (${lines}줄) — WYSIWYG에서 편집되지 않음`;
+        dom.textContent = `CSS 스타일 블록 (${lines}줄) — WYSIWYG 미리보기에 적용 중 (편집 불가)`;
       };
-      rerender();
+      apply();
 
       return {
         dom,
         update: (next) => {
           if (next.type.name !== this.name) return false;
           current = next;
-          rerender();
+          apply();
           return true;
+        },
+        destroy: () => {
+          styleEl.remove();
         },
       };
     };

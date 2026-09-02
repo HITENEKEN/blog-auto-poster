@@ -7,9 +7,22 @@ import { Button } from './ui/Button';
 import { Input } from './ui/Input';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from './ui/Select';
 import { Badge } from './ui/Badge';
-import { FileText, RefreshCw, ExternalLink, Pencil } from 'lucide-react';
+import { FileText, RefreshCw, ExternalLink, Pencil, Loader2, Trash2 } from 'lucide-react';
 import { formatDistanceToNow } from 'date-fns';
 import { clsx } from 'clsx';
+import { isAxiosError } from 'axios';
+import { Dialog } from './ui/dialog';
+import { useToast } from './ui/use-toast';
+/** GET /api/posts/drafts 항목 — 백엔드가 키워드 생성 진행 상황을 generationStatus로 함께 내려준다. */
+interface DraftSummary {
+  id: string;
+  title: string;
+  status: string;
+  template: string;
+  createdAt: string;
+  generationStatus?: 'generating' | 'done' | 'failed';
+  generationError?: string;
+}
 
 const statusColors = {
   published: 'bg-green-100 text-green-700',
@@ -22,13 +35,12 @@ const statusColors = {
 
 export default function Posts() {
   const navigate = useNavigate();
+  const { toast } = useToast();
   const [posts, setPosts] = useState<PostSummary[]>([]);
   const [loading, setLoading] = useState(true);
   const [total, setTotal] = useState(0);
   const [page, setPage] = useState(1);
-  const [drafts, setDrafts] = useState<
-    { id: string; title: string; status: string; template: string; createdAt: string }[]
-  >([]);
+  const [drafts, setDrafts] = useState<DraftSummary[]>([]);
   const [filters, setFilters] = useState({
     status: '',
     platform: '',
@@ -59,27 +71,78 @@ export default function Posts() {
     fetchPosts();
   }, [fetchPosts]);
 
-  useEffect(() => {
-    api
-      .get<{
-        drafts: {
-          id: string;
-          title: string;
-          status: string;
-          template: string;
-          createdAt: string;
-        }[];
-      }>('/api/posts/drafts')
-      .then((res) => setDrafts(res.data.drafts || []))
-      .catch(() => setDrafts([]));
+  const [deleteTarget, setDeleteTarget] = useState<DraftSummary | null>(null);
+  const [deleting, setDeleting] = useState(false);
+
+  const fetchDrafts = useCallback(async () => {
+    try {
+      const response = await api.get<{ drafts: DraftSummary[] }>('/api/posts/drafts');
+      setDrafts(response.data.drafts || []);
+    } catch {
+      setDrafts([]);
+    }
   }, []);
 
-  const handlePublish = async (post: PostSummary) => {
+  useEffect(() => {
+    fetchDrafts();
+  }, [fetchDrafts]);
+
+  // 키워드 기반 생성이 백그라운드에서 진행 중이면 5초 간격으로 목록 재조회.
+  // 전부 완료/실패가 되면 재조회를 중단한다.
+  const hasGenerating = drafts.some((d) => d.generationStatus === 'generating');
+  useEffect(() => {
+    if (!hasGenerating) return;
+    const timer = setInterval(fetchDrafts, 5000);
+    return () => clearInterval(timer);
+  }, [hasGenerating, fetchDrafts]);
+
+  const handleDeleteDraft = async () => {
+    if (!deleteTarget) return;
+    setDeleting(true);
     try {
-      await api.post(`/api/posts/${post.id}/publish`, { platform: post.platform });
+      await api.delete(`/api/posts/${deleteTarget.id}`);
+      const deleted = deleteTarget;
+      setDrafts((prev) => prev.filter((d) => d.id !== deleted.id));
+      toast({ title: '삭제되었습니다', description: deleted.title || deleted.id });
+      setDeleteTarget(null);
+    } catch (error) {
+      toast({
+        title: '삭제 실패',
+        description:
+          (isAxiosError(error) && error.response?.data?.error) || '드래프트 삭제에 실패했습니다.',
+        variant: 'destructive',
+      });
+    } finally {
+      setDeleting(false);
+    }
+  };
+
+  /** 편집화면 재진입/재발행에 사용할 드래프트 디렉터리 id (이슈 #10).
+   *  과거 레코드는 draftId가 없으므로 실패 건(post_id === 드래프트 id)만 폴백한다. */
+  const resolveDraftId = (post: PostSummary): string | null =>
+    post.draftId ?? (post.status === 'failed' ? post.postId : null);
+
+  const handlePublish = async (post: PostSummary) => {
+    const draftId = resolveDraftId(post);
+    if (!draftId) {
+      toast({
+        title: '재발행 불가',
+        description: '원본 드래프트를 찾을 수 없습니다.',
+        variant: 'destructive',
+      });
+      return;
+    }
+    try {
+      await api.post(`/api/posts/${draftId}/publish`, { platform: post.platform });
+      toast({ title: '발행 요청이 완료되었습니다' });
       fetchPosts();
     } catch (error) {
       console.error('Publish failed:', error);
+      toast({
+        title: '발행 실패',
+        description: (isAxiosError(error) && error.response?.data?.error) || '발행에 실패했습니다.',
+        variant: 'destructive',
+      });
     }
   };
 
@@ -108,6 +171,7 @@ export default function Posts() {
                     <th className="pb-3 font-medium">제목</th>
                     <th className="pb-3 font-medium">템플릿</th>
                     <th className="pb-3 font-medium">생성일</th>
+                    <th className="pb-3 font-medium">상태</th>
                     <th className="pb-3 font-medium">액션</th>
                   </tr>
                 </thead>
@@ -122,14 +186,47 @@ export default function Posts() {
                           : '-'}
                       </td>
                       <td className="py-3">
-                        <Button
-                          variant="outline"
-                          size="sm"
-                          onClick={() => navigate(`/posts/${draft.id}/edit`)}
-                        >
-                          <Pencil className="mr-2 h-3 w-3" />
-                          편집
-                        </Button>
+                        {draft.generationStatus === 'generating' ? (
+                          <Badge className="bg-yellow-100 text-yellow-700">
+                            <Loader2 className="mr-1 h-3 w-3 animate-spin" />
+                            작업중
+                          </Badge>
+                        ) : draft.generationStatus === 'failed' ? (
+                          <Badge
+                            className="bg-red-100 text-red-700"
+                            title={draft.generationError || '생성에 실패했습니다.'}
+                          >
+                            실패
+                          </Badge>
+                        ) : null}
+                        {draft.generationStatus === 'failed' && draft.generationError && (
+                          <p
+                            className="mt-1 max-w-[220px] truncate text-xs text-red-600"
+                            title={draft.generationError}
+                          >
+                            {draft.generationError}
+                          </p>
+                        )}
+                      </td>
+                      <td className="py-3">
+                        <div className="flex items-center gap-1">
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            onClick={() => navigate(`/posts/${draft.id}/edit`)}
+                          >
+                            <Pencil className="mr-2 h-3 w-3" />
+                            편집
+                          </Button>
+                          <Button
+                            variant="ghost"
+                            size="icon"
+                            title="삭제"
+                            onClick={() => setDeleteTarget(draft)}
+                          >
+                            <Trash2 className="h-4 w-4 text-red-500" />
+                          </Button>
+                        </div>
                       </td>
                     </tr>
                   ))}
@@ -243,6 +340,17 @@ export default function Posts() {
                         </td>
                         <td className="py-3">
                           <div className="flex items-center gap-2">
+                            {resolveDraftId(post) && (
+                              <Button
+                                variant="outline"
+                                size="sm"
+                                title="편집화면에서 수정 후 재발행할 수 있습니다"
+                                onClick={() => navigate(`/posts/${resolveDraftId(post)}/edit`)}
+                              >
+                                <Pencil className="mr-2 h-3 w-3" />
+                                편집
+                              </Button>
+                            )}
                             {post.url && (
                               <Button variant="ghost" size="icon" asChild>
                                 <a
@@ -260,6 +368,12 @@ export default function Posts() {
                                 variant="outline"
                                 size="sm"
                                 onClick={() => handlePublish(post)}
+                                disabled={!resolveDraftId(post)}
+                                title={
+                                  resolveDraftId(post)
+                                    ? '재발행'
+                                    : '원본 드래프트가 없어 재발행할 수 없습니다'
+                                }
                               >
                                 발행
                               </Button>
@@ -303,6 +417,40 @@ export default function Posts() {
           )}
         </CardContent>
       </Card>
+
+      {/* 드래프트 삭제 확인 */}
+      <Dialog
+        open={deleteTarget !== null}
+        onClose={() => {
+          if (!deleting) setDeleteTarget(null);
+        }}
+        title="드래프트 삭제"
+        footer={
+          <>
+            <Button variant="outline" onClick={() => setDeleteTarget(null)} disabled={deleting}>
+              취소
+            </Button>
+            <Button variant="destructive" onClick={handleDeleteDraft} disabled={deleting}>
+              {deleting ? (
+                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+              ) : (
+                <Trash2 className="mr-2 h-4 w-4" />
+              )}
+              삭제
+            </Button>
+          </>
+        }
+      >
+        <p className="text-sm">
+          삭제하시겠습니까?{' '}
+          <span className="font-medium">{deleteTarget?.title || deleteTarget?.id}</span>
+        </p>
+        {deleteTarget?.generationStatus === 'generating' && (
+          <p className="mt-2 text-xs text-muted-foreground">
+            이 드래프트는 현재 생성 중입니다. 삭제하면 생성 작업도 중단됩니다.
+          </p>
+        )}
+      </Dialog>
     </div>
   );
 }

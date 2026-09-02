@@ -7,6 +7,7 @@ import {
   PlatformCredentials,
   PlatformCategory,
   SchedulerConfig,
+  PostContent,
 } from '@core/interfaces';
 import type { AffiliateRegistry } from '@affiliates/registry';
 import type { CronScheduler } from '@scheduler/CronScheduler';
@@ -22,15 +23,150 @@ import {
 } from '@content/ContentGenerator';
 import { fetchLlmModels } from '@content/LlmModels';
 import { createTemplateEngine } from '@content/TemplateEngine';
-import { createImageGenerator } from '@content/ImageGenerator';
+import {
+  resolveImageGenerator,
+  resolveGeminiImageConfig,
+  generateImagesSafely,
+  interleaveImageSpecs,
+} from '@content/ImageGenerator';
+import { buildProductImagePrompts, buildSectionImageSpecs } from '@content/imagePrompts';
 import { createPostAssembler } from '@content/PostAssembler';
 import { expandCoupangWidgets } from '@content/CoupangWidgets';
+import { fetchLinkPreviewCards, stylePublishHtml } from '@content/CoupangPreview';
 import { generateDraftFromKeyword } from '@content/KeywordPostGenerator';
-import { savePostFiles, readPostFiles, listDrafts, type PostFileMeta } from '@content/postStorage';
+import {
+  savePostFiles,
+  readPostFiles,
+  listDrafts,
+  updatePostMeta,
+  deleteDraftFiles,
+  failStaleGeneratingDrafts,
+  resolvePostImagePaths,
+  type PostFileMeta,
+} from '@content/postStorage';
+import {
+  getShoppingCategorySnapshot,
+  saveShoppingCategoryTree,
+} from '../../../intelligence/ShoppingCategoryStore';
+import {
+  getCategoryTreeRefreshState,
+  refreshDatalabCategoryTree,
+  fetchDatalabCategoryKeywordRank,
+} from '../../../intelligence/DatalabShoppingRank';
 import * as fs from 'fs';
 import * as path from 'path';
 import * as yaml from 'js-yaml';
-import { sortByPostdateDesc } from '../../../intelligence/NaverApiHubProvider';
+import {
+  NaverApiHubKeywordProvider,
+  sortByPostdateDesc,
+} from '../../../intelligence/NaverApiHubProvider';
+import { classifyTrend, monthRange } from '../../../intelligence/TrendAnalysis';
+import type { ShoppingCriteria } from '../../../intelligence/NaverApiHubProvider';
+import shoppingCategoriesJson from '../../shared/shoppingCategories.json';
+
+/** SHPP_INST 조회 기준 — provider의 ShoppingCriteria와 동일한 값 집합. */
+const SHOPPING_CRITERIA: readonly ShoppingCriteria[] = [
+  'category',
+  'keyword',
+  'gender',
+  'ages',
+  'device',
+  'keywords',
+  'keywords-keyword',
+  'keywords-gender',
+  'keywords-ages',
+  'keywords-device',
+];
+
+/**
+ * query(검색어)가 필요한 SHPP_INST criteria — /category/keywords·keyword-level
+ * breakdown 계열. 분야-level('category'|'gender'|'ages'|'device')은 query 없이
+ * category만으로 조회된다.
+ */
+const KEYWORD_LEVEL_CRITERIA: readonly ShoppingCriteria[] = [
+  'keyword',
+  'keywords',
+  'keywords-keyword',
+  'keywords-gender',
+  'keywords-ages',
+  'keywords-device',
+];
+
+/**
+ * criteria별 SHPP_INST 요청 바디 — 공식 스펙 기준(NAVER API HUB, 2026-08).
+ * 경로 매핑은 provider의 SHOPPING_ENDPOINTS가 담당한다.
+ * - 'category' (/categories): category가 [{name, param:[cat_id]}] 배열 — name은
+ *   query/categoryName이 없으면 cat_id로 대체 (라우트 계약상 'category'는 query
+ *   불필요; categoryName은 시리즈 title 표시용)
+ * - 'keywords-gender'/'keywords-ages'/'keywords-device'
+ *   (/category/keyword/gender·/age·/device): keyword String
+ * - 'keyword'/'keywords'/'keywords-keyword' (/category/keywords): keyword 1쌍 배열
+ * - device/gender/ages 필터는 공식 스펙의 optional 필드 — 값이 있을 때만 전송
+ */
+export function buildShoppingBody(
+  criteria: ShoppingCriteria,
+  params: {
+    query: string;
+    category: string;
+    categoryName?: string;
+    startDate: string;
+    endDate: string;
+    timeUnit: string;
+    device: string;
+    gender: string;
+    ages: string[];
+  },
+): Record<string, unknown> {
+  const base: Record<string, unknown> = {
+    startDate: params.startDate,
+    endDate: params.endDate,
+    timeUnit: params.timeUnit,
+    ...(params.device ? { device: params.device } : {}),
+    ...(params.gender ? { gender: params.gender } : {}),
+    ...(params.ages.length ? { ages: params.ages } : {}),
+  };
+  if (criteria === 'category') {
+    return {
+      ...base,
+      category: [
+        { name: params.query || params.categoryName || params.category, param: [params.category] },
+      ],
+    };
+  }
+  if (criteria === 'gender' || criteria === 'ages' || criteria === 'device') {
+    return { ...base, category: params.category };
+  }
+  if (
+    criteria === 'keywords-gender' ||
+    criteria === 'keywords-ages' ||
+    criteria === 'keywords-device'
+  ) {
+    return { ...base, category: params.category, keyword: params.query };
+  }
+  // 'keyword' | 'keywords' | 'keywords-keyword' → /category/keywords (keyword 1쌍 배열)
+  return {
+    ...base,
+    category: params.category,
+    keyword: [{ name: params.query, param: [params.query] }],
+  };
+}
+
+/** GET /api/keywords/shopping-categories 응답 노드 — 클라이언트 ShoppingCategoryNode와 동일 계약(1~3분류 재귀 트리). */
+export interface ShoppingCategoryNode {
+  catId: string;
+  name: string;
+  children?: ShoppingCategoryNode[];
+}
+
+/**
+ * 정적 카테고리 코드표(scripts/scrape-naver-shopping-categories.* 생성물)를
+ * 모듈 레벨 1회 로드해 캐시한다 — 매 요청마다 파일/파싱을 반복하지 않는다.
+ */
+const shoppingCategoriesCache = shoppingCategoriesJson as ShoppingCategoryNode[];
+
+export function loadShoppingCategories(): ShoppingCategoryNode[] {
+  return shoppingCategoriesCache;
+}
 
 const logger = getLogger('api-routes');
 
@@ -101,18 +237,23 @@ export interface RouteContext {
 
 export async function registerRoutes(app: FastifyInstance, context: RouteContext): Promise<void> {
   const { configManager, affiliateRegistry, platformRegistry, jobQueue, scheduler } = context;
+  // 서버 재시작으로 끊긴 백그라운드 생성('generating' 고아 드래프트)을 'failed'로 스윕.
+  // 기동 시점엔 진행 중인 in-process 생성이 없으므로 1회만 수행한다.
+  const swept = failStaleGeneratingDrafts();
+  if (swept > 0) {
+    logger.warn({ count: swept }, 'Marked stale generating drafts as failed after restart');
+  }
+
+  // 백그라운드 키워드 생성 취소 플래그 — DELETE가 generating 드래프트를 지우면
+  // 세트에 id를 넣고, 백그라운드 작업은 저장 직전 이 플래그를 보고 중단한다
+  // (완료 후 savePostFiles가 디렉터리를 좀비 부활시키는 것을 방지).
+  const cancelledGenerations = new Set<string>();
 
   // Credential validation hits external APIs; cache results so 30-60s dashboard
   // polling doesn't burn provider quotas on every request.
   type DashboardValidation = {
     affiliates: Record<string, boolean>;
     platforms: Record<string, boolean>;
-  };
-  type KeywordRow = {
-    keyword: string;
-    volume: number;
-    competition: number;
-    related?: string[];
   };
   const dashboardValidationCache = getCache<DashboardValidation>('dashboard-stats-validation');
 
@@ -412,89 +553,305 @@ export async function registerRoutes(app: FastifyInstance, context: RouteContext
     }
   });
 
-  // Keywords - Top 20 (query-less feed aggregated from seed keywords via Naver API Hub)
-  app.get('/api/keywords/top', async (request) => {
-    const { seeds, limit = '20' } = request.query as { seeds?: string; limit?: string };
-    const topLimit = parseInt(limit) || 20;
-
-    let seedList: string[] = [];
-    if (typeof seeds === 'string' && seeds.trim()) {
-      seedList = seeds
-        .split(',')
-        .map((s: string) => s.trim())
-        .filter(Boolean);
-    } else {
-      seedList = (configManager.get('keywords.topSeeds', []) as string[]) || [];
-    }
-
-    if (seedList.length === 0) {
-      return { keywords: [], source: 'naver-api-hub', error: 'No seed keywords configured' };
-    }
-    const hubConfig = configManager.getKeywordProviderConfig('naver-api-hub');
-    if (!hubConfig?.apiKey || !hubConfig?.apiSecret) {
+  // Keywords - shopping category tree (정적 코드표 — scripts/scrape-naver-shopping-categories.* 생성물)
+  app.get('/api/keywords/shopping-categories', async () => {
+    // 1순위: SQLite 저장 트리(DB 비었으면 커밋된 JSON으로 시드) + 갱신 상태.
+    const snap = getShoppingCategorySnapshot();
+    if (snap) {
       return {
-        keywords: [],
-        source: 'naver-api-hub',
-        error: 'Naver API Hub credentials not configured',
+        categories: snap.tree,
+        updatedAt: snap.updatedAt,
+        nodeCount: snap.nodeCount,
+        source: snap.source,
+        refresh: getCategoryTreeRefreshState(),
       };
     }
+    return { categories: loadShoppingCategories(), refresh: getCategoryTreeRefreshState() };
+  });
 
-    const { NaverApiHubKeywordProvider } =
-      await import('../../../intelligence/NaverApiHubProvider.js');
+  // 코드표 갱신 트리거 — 데이터랩을 실조회해 1~4분류 트리를 재수집한다(백그라운드,
+  // 30~60분). 상태는 GET /api/keywords/shopping-categories[/refresh] 로 폴링.
+  app.post('/api/keywords/shopping-categories/refresh', async (request) => {
+    const body = (request.body || {}) as { maxDepth?: number };
+    const state = await refreshDatalabCategoryTree({
+      maxDepth: typeof body.maxDepth === 'number' ? body.maxDepth : 4,
+      onSave: (tree) => saveShoppingCategoryTree(tree, 'datalab'),
+    });
+    return { started: state.running, state };
+  });
+
+  app.get('/api/keywords/shopping-categories/refresh', async () => {
+    return { state: getCategoryTreeRefreshState() };
+  });
+
+  // Keywords - trend lookup (SCH_TRND / SHPP_INST) with search filters
+  app.post('/api/keywords/trend', async (request) => {
+    const body = (request.body ?? {}) as {
+      source?: string;
+      query?: string;
+      category?: string;
+      categoryName?: string;
+      criteria?: ShoppingCriteria;
+      startDate?: string;
+      endDate?: string;
+      timeUnit?: string;
+      device?: string;
+      gender?: string;
+      ages?: string[];
+    };
+    const {
+      source,
+      query = '',
+      category = '',
+      categoryName = '',
+      startDate = '',
+      endDate = '',
+      timeUnit = 'month',
+      device = '',
+      gender = '',
+      ages = [],
+    } = body;
+    const criteria: ShoppingCriteria =
+      body.criteria && SHOPPING_CRITERIA.includes(body.criteria) ? body.criteria : 'keywords';
+    const searchedAt = new Date().toISOString();
+    const requestEcho = {
+      startDate,
+      endDate,
+      timeUnit,
+      device,
+      gender,
+      ages,
+      criteria: source === 'shopping-insight' ? criteria : undefined,
+      category: source === 'shopping-insight' ? category : undefined,
+      categoryName: source === 'shopping-insight' ? categoryName || undefined : undefined,
+    };
+
+    const fail = (error: string) => ({
+      source,
+      series: [],
+      request: requestEcho,
+      searchedAt,
+      error,
+    });
+
+    if (source !== 'search-trend' && source !== 'shopping-insight') {
+      return fail("source must be 'search-trend' or 'shopping-insight'");
+    }
+    // 검색어가 필요한 case: search-trend 전체, shopping 중 keyword-level criteria.
+    // 분야-level('category'|'gender'|'ages'|'device')은 query 없이 category만으로 조회.
+    const needsQuery = source === 'search-trend' || KEYWORD_LEVEL_CRITERIA.includes(criteria);
+    if (needsQuery && !query.trim()) {
+      return fail(
+        source === 'search-trend' ? 'Query required' : 'Query required for keyword-based criteria',
+      );
+    }
+    if (source === 'shopping-insight' && !category.trim()) {
+      return fail('Category required for shopping-insight');
+    }
+    const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
+    if (!DATE_RE.test(startDate) || !DATE_RE.test(endDate)) {
+      return fail('startDate/endDate must be yyyy-mm-dd');
+    }
+    if (startDate > endDate) {
+      return fail('startDate must be before or equal to endDate');
+    }
+
+    const hubConfig = configManager.getKeywordProviderConfig('naver-api-hub');
+    if (!hubConfig?.apiKey || !hubConfig?.apiSecret) {
+      return fail('Naver API Hub credentials not configured');
+    }
+
     const provider = new NaverApiHubKeywordProvider(hubConfig);
 
     try {
-      const seen = new Set<string>();
-      const all: KeywordRow[] = [];
-
-      // Stage 1: research each seed (24h-cached inside the provider).
-      // Collect related keywords from blog-search titles — no extra API calls.
-      const candidateSet = new Set<string>();
-      for (const seed of seedList) {
-        const results = await provider.research([seed], { limit: topLimit });
-        for (const r of results) {
-          if (r.keyword && !seen.has(r.keyword)) {
-            seen.add(r.keyword);
-            all.push(r);
-          }
-          for (const rel of r.related || []) {
-            if (rel && rel !== seed) candidateSet.add(rel);
+      const results =
+        source === 'search-trend'
+          ? await provider.getSearchTrend([{ groupName: query, keywords: [query] }], {
+              startDate,
+              endDate,
+              timeUnit: timeUnit as 'date' | 'week' | 'month',
+              device,
+              gender,
+              ages,
+            })
+          : await provider.getShoppingTrend(
+              criteria,
+              buildShoppingBody(criteria, {
+                query: query.trim(),
+                category,
+                categoryName,
+                startDate,
+                endDate,
+                timeUnit: timeUnit as 'date' | 'week' | 'month',
+                device,
+                gender,
+                ages,
+              }),
+            );
+      const series = results.map((group) => ({ ...group, trend: classifyTrend(group.data ?? []) }));
+      // 분야 유효성 — SHPP는 유효하지 않은 cat_id에도 200과 빈 data를 돌려준다
+      // (에러 없음). 'category' criteria는 응답 자체의 data 존재가 유효성 신호고,
+      // 나머지 criteria는 /categories probe(24h 캐시) 1회로 판정한다. probe 실패는
+      // 결과 조회를 깨지 않는다(필드 생략).
+      let categoryValid: boolean | undefined;
+      if (source === 'shopping-insight') {
+        if (criteria === 'category') {
+          categoryValid = (results[0]?.data?.length ?? 0) > 0;
+        } else {
+          try {
+            const probe = await provider.getShoppingTrend('category', {
+              ...monthRange(12),
+              timeUnit: 'month',
+              category: [{ name: categoryName || category, param: [category] }],
+            });
+            categoryValid = (probe[0]?.data?.length ?? 0) > 0;
+          } catch (probeError) {
+            logger.warn({ category, error: String(probeError) }, 'Category validity probe failed');
           }
         }
       }
-
-      // Stage 2: research related candidates (cap 40) in batches of 5;
-      // individual failures are logged and skipped.
-      const candidates = [...candidateSet].slice(0, 40);
-      for (let i = 0; i < candidates.length; i += 5) {
-        const batch = candidates.slice(i, i + 5);
-        const rows = await Promise.all(
-          batch.map(async (kw) => {
-            try {
-              const res = await provider.research([kw], { limit: topLimit });
-              return res[0] || null;
-            } catch (error) {
-              logger.error(
-                { keyword: kw, error: String(error) },
-                'Candidate keyword research failed',
-              );
-              return null;
-            }
-          }),
-        );
-        for (const row of rows) {
-          if (row?.keyword && !seen.has(row.keyword)) {
-            seen.add(row.keyword);
-            all.push(row);
-          }
-        }
-      }
-
-      all.sort((a, b) => b.volume * (1 - b.competition) - a.volume * (1 - a.competition));
-      return { keywords: all.slice(0, topLimit), source: 'naver-api-hub', estimated: true };
+      return {
+        source,
+        series,
+        request: requestEcho,
+        searchedAt,
+        ...(categoryValid === undefined ? {} : { categoryValid }),
+      };
     } catch (error) {
-      logger.error({ error: String(error) }, 'Top keywords aggregation failed');
-      return { keywords: [], source: 'naver-api-hub', error: String(error) };
+      logger.error({ error: String(error), source, query, criteria }, 'Trend lookup failed');
+      return fail(String(error));
+    }
+  });
+
+  // 쇼핑인사이트 카테고리 오버뷰(이슈 #13) — 조회하기 1회 클릭으로 위젯 전체
+  // (클릭량 추이 + 기기/성별/연령 비중 + 인기검색어 TOP 20) 데이터를 병렬 조회해
+  // 반환한다. 카테고리/기간/조건은 요청 파라미터 그대로 전달(고정값 없음)하며,
+  // 스펙 제약(startDate ≥ 2017-08-01, timeUnit, device/gender/ages 값)을 검증한다.
+  app.get('/api/keywords/category-overview', async (request) => {
+    const q = request.query as Record<string, string | string[]>;
+    const category = String(q.category ?? '').trim();
+    const categoryName = String(q.categoryName ?? '').trim();
+    const startDate = String(q.startDate ?? '');
+    const endDate = String(q.endDate ?? '');
+    const timeUnit = String(q.timeUnit ?? 'week');
+    const device = String(q.device ?? '');
+    const gender = String(q.gender ?? '');
+    const rawAges = q.ages;
+    const ageList = (Array.isArray(rawAges) ? rawAges : rawAges ? String(rawAges).split(',') : [])
+      .map((a) => a.trim())
+      .filter(Boolean);
+    const topLimit = Math.min(Math.max(parseInt(String(q.limit ?? '20'), 10) || 20, 1), 20);
+
+    const fail = (error: string) => ({ error });
+    const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
+    if (!category) return fail('category is required');
+    if (!DATE_RE.test(startDate) || !DATE_RE.test(endDate)) {
+      return fail('startDate/endDate must be yyyy-mm-dd');
+    }
+    if (startDate < '2017-08-01') return fail('startDate must be on or after 2017-08-01');
+    if (startDate > endDate) return fail('startDate must be before or equal to endDate');
+    if (!['date', 'week', 'month'].includes(timeUnit)) {
+      return fail('timeUnit must be date|week|month');
+    }
+    if (device && !['pc', 'mo'].includes(device)) return fail('device must be pc|mo');
+    if (gender && !['m', 'f'].includes(gender)) return fail('gender must be m|f');
+    if (ageList.some((a) => !['10', '20', '30', '40', '50', '60'].includes(a))) {
+      return fail('ages must be 10|20|30|40|50|60');
+    }
+
+    const hubConfig = configManager.getKeywordProviderConfig('naver-api-hub');
+    if (!hubConfig?.apiKey || !hubConfig?.apiSecret) {
+      return fail('Naver API Hub credentials not configured');
+    }
+    const provider = new NaverApiHubKeywordProvider(hubConfig);
+
+    // 분야 유효성 probe — /categories는 유효 cat_id에만 data를 채운다. 실패는
+    // 오버뷰 조회를 깨지 않는다(유효성 미판정).
+    let categoryValid: boolean | undefined;
+    try {
+      const probe = await provider.getShoppingTrend('category', {
+        startDate,
+        endDate,
+        timeUnit,
+        category: [{ name: categoryName || category, param: [category] }],
+      });
+      categoryValid = (probe[0]?.data?.length ?? 0) > 0;
+    } catch (probeError) {
+      logger.warn({ category, error: String(probeError) }, 'Category validity probe failed');
+    }
+
+    // 비중 분해는 각 차원 자신을 제외한 나머지 조건만 적용한다(데이터랩 동작 동일).
+    const base = {
+      query: '',
+      category,
+      categoryName,
+      startDate,
+      endDate,
+      timeUnit,
+      device,
+      gender,
+      ages: ageList,
+    };
+
+    try {
+      const [clickTrend, deviceSeries, genderSeries, agesSeries] = await Promise.all([
+        provider.getShoppingTrend('category', buildShoppingBody('category', base)).catch(() => []),
+        provider
+          .getShoppingTrend('device', buildShoppingBody('device', { ...base, device: '' }))
+          .catch(() => []),
+        provider
+          .getShoppingTrend('gender', buildShoppingBody('gender', { ...base, gender: '' }))
+          .catch(() => []),
+        provider
+          .getShoppingTrend('ages', buildShoppingBody('ages', { ...base, ages: [] }))
+          .catch(() => []),
+      ]);
+
+      // 인기검색어 TOP 20 — DataLab 분야 인기검색어 랭킹 직조회(이슈 #14 A안).
+      // 공식 쇼핑인사이트 API에는 랭킹 엔드포인트가 없어(8개 전부 트렌드 추이 조회)
+      // 데이터랩 웹 UI가 사용하는 내부 XHR API를 사용한다 — 로그인 불필요, ~1초
+      // 응답, 화면 표시와 100% 동일. 24h 캐시, 실패 시 빈 목록(추정 폴백 없음).
+      let keywords: KeywordData[] = [];
+      const keywordsSource = 'naver-datalab';
+      try {
+        const rankRows = await fetchDatalabCategoryKeywordRank({
+          catId: category,
+          startDate,
+          endDate,
+          timeUnit: timeUnit as 'date' | 'week' | 'month',
+          device: device || undefined,
+          gender: gender || undefined,
+          ages: ageList.length > 0 ? ageList : undefined,
+          count: topLimit,
+        });
+        keywords = rankRows.map((r) => ({
+          keyword: r.keyword,
+          volume: Math.max(1, 1000 - (r.rank - 1) * 50),
+          competition: 0,
+          trend: 'stable' as const,
+          related: [] as string[],
+          source: 'naver-api-hub' as const,
+          metadata: { volumeBasis: 'datalab-measured', rank: r.rank },
+        }));
+      } catch (rankError) {
+        logger.warn(
+          { category, error: String(rankError) },
+          'Datalab category rank fetch failed; returning empty list',
+        );
+      }
+
+      return {
+        category,
+        categoryName: categoryName || undefined,
+        categoryValid,
+        clickTrend,
+        shares: { device: deviceSeries, gender: genderSeries, ages: agesSeries },
+        keywords,
+        keywordsSource,
+      };
+    } catch (error) {
+      logger.error({ category, error: String(error) }, 'Category overview failed');
+      return fail(String(error));
     }
   });
 
@@ -619,19 +976,25 @@ export async function registerRoutes(app: FastifyInstance, context: RouteContext
     const total = jobQueue.getPublishedPosts({ status, platform, fromDate, toDate }).length;
 
     return {
-      posts: posts.map((p) => ({
-        id: p.id,
-        jobId: p.job_id,
-        platform: p.platform,
-        postId: p.post_id,
-        url: p.url,
-        title: p.title,
-        template: p.template,
-        productId: p.product_id,
-        status: p.status,
-        publishedAt: p.published_at,
-        metadata: p.metadata ? JSON.parse(p.metadata) : null,
-      })),
+      posts: posts.map((p) => {
+        const parsedMeta = p.metadata ? JSON.parse(p.metadata) : null;
+        return {
+          id: p.id,
+          jobId: p.job_id,
+          platform: p.platform,
+          postId: p.post_id,
+          // 편집화면 재진입/재발행용 드래프트 id (이슈 #10).
+          // 과거 레코드(draftId 미기록)는 실패 건에 한해 post_id가 드래프트 id와 동일하므로 폴백한다.
+          draftId: parsedMeta?.draftId ?? (p.status === 'failed' ? p.post_id : null),
+          url: p.url,
+          title: p.title,
+          template: p.template,
+          productId: p.product_id,
+          status: p.status,
+          publishedAt: p.published_at,
+          metadata: parsedMeta,
+        };
+      }),
       total,
       limit: parseInt(limit),
       offset: parseInt(offset),
@@ -661,14 +1024,34 @@ export async function registerRoutes(app: FastifyInstance, context: RouteContext
     await templateEngine.loadTemplates();
     await templateEngine.validateTemplate(template);
 
-    const imageGenerator = createImageGenerator('placeholder', './output/images');
+    const imageGenerator = resolveImageGenerator('./output/images');
     const postAssembler = createPostAssembler(templateEngine, imageGenerator);
+    // R5: gemini 설정 시에만 상품+섹션 이미지 생성 (미설정/실패 시 images 없이 발행)
+    const images = resolveGeminiImageConfig()
+      ? await generateImagesSafely(
+          imageGenerator,
+          interleaveImageSpecs(
+            buildProductImagePrompts({
+              productName: product.name,
+              categoryName: product.categoryName,
+              brand: product.brand,
+            }).map((prompt) => ({ prompt })),
+            buildSectionImageSpecs({
+              productName: product.name,
+              categoryName: product.categoryName,
+            })
+              .slice(0, 3)
+              .map((spec) => ({ key: spec.key, prompt: spec.prompt })),
+          ),
+        )
+      : { urls: [], localPaths: [], sectionImages: {} };
 
     const post = await postAssembler.assemble({
       template,
       affiliateData: product,
       platform,
       subId,
+      images,
     });
 
     savePostFiles(post);
@@ -682,13 +1065,72 @@ export async function registerRoutes(app: FastifyInstance, context: RouteContext
       return reply.code(400).send({ error: 'keyword and template are required' });
     }
 
-    try {
-      const post = await generateDraftFromKeyword({ keyword, templateName: template });
-      return { post };
-    } catch (error) {
-      logger.error({ error: String(error) }, 'Keyword draft generation failed');
-      return reply.code(500).send({ error: String(error) });
+    // 플레이스홀더 저장 전에 템플릿 존재 여부를 동기 검증해 즉시 400으로 실패시킨다.
+    const templateEngine = createTemplateEngine('./templates');
+    await templateEngine.loadTemplates();
+    if (!templateEngine.getTemplateInfo(template)) {
+      return reply.code(400).send({ error: `Template not found: ${template}` });
     }
+
+    const id = `post-${Date.now()}-${Math.random().toString(36).substring(7)}`;
+    const now = new Date().toISOString();
+    // 즉시 반환용 드래프트 플레이스홀더 — 백그라운드 생성이 같은 id로 본문/이미지/제목을 교체한다.
+    const placeholder: PostContent = {
+      id,
+      template,
+      productId: `keyword:${keyword}`,
+      platform: 'unknown',
+      status: 'DRAFT',
+      title: `${keyword} (생성 중...)`,
+      content: '',
+      meta: { description: '', keywords: [keyword] },
+      tags: [],
+      categories: [],
+      platformContent: {},
+      affiliateUrl: '',
+      images: [],
+      createdAt: now,
+      updatedAt: now,
+    };
+    savePostFiles(placeholder);
+    updatePostMeta(id, { generationStatus: 'generating' });
+
+    // 실제 생성(LLM→이미지→assemble→저장)은 응답과 무관하게 백그라운드로 계속 진행한다.
+    void generateDraftFromKeyword({
+      keyword,
+      templateName: template,
+      postId: id,
+      // DELETE로 드래프트가 지워졌으면 저장 직전에 중단한다(좀비 부활 방지).
+      isCancelled: () => cancelledGenerations.has(id),
+    })
+      .then(() => {
+        // 취소된 생성은 상태를 기록하지 않는다(디렉터리도 이미 삭제됨).
+        if (cancelledGenerations.has(id)) return;
+        updatePostMeta(id, {
+          generationStatus: 'done',
+          generationError: undefined,
+          updatedAt: new Date().toISOString(),
+        });
+        logger.info({ postId: id, keyword, template }, 'Background keyword draft generation done');
+      })
+      .catch((error) => {
+        if (cancelledGenerations.has(id)) {
+          logger.info({ postId: id }, 'Background keyword draft generation cancelled');
+          return;
+        }
+        logger.error(
+          { postId: id, keyword, template, error: String(error) },
+          'Background keyword draft generation failed',
+        );
+        // 드래프트는 남기고 실패 상태만 기록한다.
+        updatePostMeta(id, {
+          generationStatus: 'failed',
+          generationError: String(error),
+          updatedAt: new Date().toISOString(),
+        });
+      });
+
+    return { post: { id } };
   });
 
   app.get('/api/posts/drafts', async () => {
@@ -701,7 +1143,15 @@ export async function registerRoutes(app: FastifyInstance, context: RouteContext
     if (!files) {
       return reply.code(404).send({ error: 'Post not found' });
     }
-    return { post: { id, meta: files.meta, content: files.content } };
+    return {
+      post: {
+        id,
+        meta: files.meta,
+        content: files.content,
+        generationStatus: files.meta.generationStatus,
+        generationError: files.meta.generationError,
+      },
+    };
   });
 
   app.put('/api/posts/:id', async (request, reply) => {
@@ -716,6 +1166,13 @@ export async function registerRoutes(app: FastifyInstance, context: RouteContext
       return reply.code(404).send({ error: 'Post not found' });
     }
 
+    // 백그라운드 생성 중인 드래프트는 저장을 거부한다 — 완료 시 백그라운드
+    // savePostFiles가 사용자 편집을 통째로 덮어쓰는 유실을 막는다.
+    // placeholder는 POST 응답 전에 'generating'으로 저장되므로 그 사이 창도 커버된다.
+    if (files.meta.generationStatus === 'generating') {
+      return reply.code(409).send({ error: '포스트 생성이 진행 중입니다. 완료 후 편집하세요.' });
+    }
+
     const meta = files.meta;
     if (title) meta.title = title;
     meta.platformContent = toPlatformContent(meta, content);
@@ -725,6 +1182,59 @@ export async function registerRoutes(app: FastifyInstance, context: RouteContext
     fs.writeFileSync(`./output/posts/${id}/meta.json`, JSON.stringify(meta, null, 2));
 
     return { success: true, post: { id, meta, content } };
+  });
+
+  app.delete('/api/posts/:id', async (request, reply) => {
+    const { id } = request.params as { id: string };
+    const files = readPostFiles(id);
+    if (!files) {
+      return reply.code(404).send({ error: 'Post not found' });
+    }
+    // 게시된 포스트는 삭제 대상이 아니다 — publish 성공 시 meta.status가 'PUBLISHED'로 기록된다.
+    if (files.meta.status !== 'DRAFT') {
+      return reply.code(400).send({ error: 'Published posts cannot be deleted' });
+    }
+    // generating 중이면 백그라운드 생성을 취소 표시한다 — 작업이 완료 시점에 도달해도
+    // 저장하지 않으므로 삭제된 디렉터리가 부활하지 않는다.
+    if (files.meta.generationStatus === 'generating') {
+      cancelledGenerations.add(id);
+    }
+    if (!deleteDraftFiles(id)) {
+      return reply.code(400).send({ error: 'Invalid post id' });
+    }
+    logger.info({ postId: id, cancelled: cancelledGenerations.has(id) }, 'Draft deleted');
+    return { success: true };
+  });
+
+  app.post('/api/posts/:id/ai-edit', async (request, reply) => {
+    const { id } = request.params as { id: string };
+    const { prompt } = request.body as { prompt?: string };
+    if (typeof prompt !== 'string' || prompt.trim().length === 0) {
+      return reply.code(400).send({ error: 'prompt is required' });
+    }
+
+    const files = readPostFiles(id);
+    if (!files) {
+      return reply.code(404).send({ error: 'Post not found' });
+    }
+
+    let saved: ContentGeneratorConfig;
+    try {
+      saved = resolveLlmConfigFromConfigManager();
+    } catch {
+      saved = {};
+    }
+
+    try {
+      const content = await new ContentGenerator(saved).editPostHtml(files.content, prompt.trim());
+      if (!content) {
+        return reply.code(500).send({ error: 'LLM returned empty content' });
+      }
+      return { content };
+    } catch (error) {
+      logger.error({ postId: id, error: String(error) }, 'AI edit failed');
+      return reply.code(500).send({ error: String(error) });
+    }
   });
 
   app.post('/api/posts/:id/publish', async (request) => {
@@ -739,7 +1249,29 @@ export async function registerRoutes(app: FastifyInstance, context: RouteContext
     }
 
     const postMeta = JSON.parse(fs.readFileSync(postPath, 'utf-8'));
-    const content = fs.readFileSync(`./output/posts/${id}/post.html`, 'utf-8');
+    let content = fs.readFileSync(`./output/posts/${id}/post.html`, 'utf-8');
+
+    // AI 최종 다듬기(이슈 #12) — 기본 ON, body.aiPolish === false로 끈다.
+    const { aiPolish: aiPolishOpt } = request.body as { aiPolish?: boolean };
+    const aiPolish = aiPolishOpt !== false;
+    if (aiPolish) {
+      try {
+        const generator = new ContentGenerator(resolveLlmConfigFromConfigManager());
+        const polished = await generator.polishForPublish(content);
+        if (polished && polished !== content) {
+          content = polished;
+          // 다듬어진 최종본을 저장해 편집화면에서도 동일 버전을 유지한다.
+          fs.writeFileSync(`./output/posts/${id}/post.html`, content);
+          for (const key of Object.keys(postMeta.platformContent || {})) {
+            postMeta.platformContent[key].content = content;
+          }
+          fs.writeFileSync(postPath, JSON.stringify(postMeta, null, 2));
+        }
+      } catch (error) {
+        // LLM 미설정/실패 시 원본으로 계속 진행한다(발행이 막히지 않게 한다).
+        logger.warn({ postId: id, error: String(error) }, 'Publish-time AI polish skipped');
+      }
+    }
 
     const targetPlatforms = platform ? [platform] : Object.keys(postMeta.platformContent || {});
 
@@ -762,8 +1294,32 @@ export async function registerRoutes(app: FastifyInstance, context: RouteContext
         allowComments: true,
       };
 
-      // 쿠팡 위젯 마커를 실제 파트너스 HTML로 확장 (폴백 브랜치 포함 모든 content 대상)
-      platformContent.content = expandCoupangWidgets(platformContent.content);
+      // 1) 링크 미리보기 카드 수집(이슈 #12) — product-link/event-link URL을 읽어
+      //    상품 이미지·가격·평점 카드를 만든다. 실패 시 해당 링크만 텍스트 링크로 폴백.
+      const coupangAdapter = affiliateRegistry.getAdapter('coupang');
+      const previewCards = await fetchLinkPreviewCards(
+        platformContent.content,
+        coupangAdapter ?? undefined,
+      ).catch(() => new Map<number, string>());
+
+      // 2) 위젯 마커 확장 — platform을 전달해 네이버 발행 시 script 위젯을 iframe
+      //    위젯으로 변환하고(이슈 #10), 위젯을 중앙 정렬 컨테이너로 감싼다(이슈 #12).
+      platformContent.content = expandCoupangWidgets(platformContent.content, {
+        platform: platformName,
+        previewCards,
+      });
+
+      // 3) 발행 시점 전 위젯/이미지 스타일 정리(이슈 #12)
+      platformContent.content = stylePublishHtml(platformContent.content);
+
+      // #7: 발행 대상 이미지 로컬 경로 수집 (meta.images → post.html <img> 폴백) —
+      // 네이버 등 브라우저 발행 어댑터가 에디터에 업로드한다.
+      if (!platformContent.images || platformContent.images.length === 0) {
+        const localImagePaths = resolvePostImagePaths(postMeta.images, content);
+        if (localImagePaths.length > 0) {
+          platformContent.images = localImagePaths.map((p) => ({ localPath: p, altText: '' }));
+        }
+      }
 
       try {
         const result = await adapter.createPost(platformContent);
@@ -776,7 +1332,8 @@ export async function registerRoutes(app: FastifyInstance, context: RouteContext
           productId: postMeta.productId,
           affiliateUrl: postMeta.affiliateUrl,
           status: 'published',
-          metadata: { result },
+          // draftId: 편집화면 재진입/재발행용 드래프트 디렉터리 id (이슈 #10)
+          metadata: { result, draftId: id },
         });
         results.push({ platform: platformName, ...result, success: true });
       } catch (error) {
@@ -789,10 +1346,17 @@ export async function registerRoutes(app: FastifyInstance, context: RouteContext
           productId: postMeta.productId,
           affiliateUrl: postMeta.affiliateUrl,
           status: 'failed',
-          metadata: { error: String(error) },
+          // draftId: 실패 포스트도 편집화면에서 재발행할 수 있게 기록한다(이슈 #10)
+          metadata: { error: String(error), draftId: id },
         });
         results.push({ platform: platformName, error: String(error), success: false });
       }
+    }
+
+    // 게시 성공을 로컬 meta.json에 기록한다 — DELETE /api/posts/:id가 게시된 포스트를
+    // 거부하고, 목록의 드래프트/게시 구분이 가능해진다.
+    if (results.some((r) => r.success)) {
+      updatePostMeta(id, { status: 'PUBLISHED', updatedAt: new Date().toISOString() });
     }
 
     return { results };

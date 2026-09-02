@@ -12,7 +12,14 @@ import type {
 } from '@core/interfaces';
 import { registerRoutes } from './routes';
 import { authMiddleware } from './middleware/auth';
+import {
+  initShoppingCategoryStore,
+  loadShoppingCategoryTreeSnapshot,
+  saveShoppingCategoryTree,
+} from '../../intelligence/ShoppingCategoryStore';
+import { refreshDatalabCategoryTree } from '../../intelligence/DatalabShoppingRank';
 import * as path from 'path';
+import cron from 'node-cron';
 
 const logger = getLogger('web-server');
 
@@ -68,6 +75,23 @@ export async function createWebServer(options: WebServerOptions): Promise<Fastif
 
   if (schedulerConfig.enabled) {
     scheduler.start();
+  }
+
+  // 쇼핑 카테고리 코드표(DB 시드/로드) + 월간 갱신 크론(#키워드 리서치).
+  // DB가 비어 있으면 커밋된 JSON(src/web/shared/shoppingCategories.json)으로 시드한다.
+  initShoppingCategoryStore();
+  loadShoppingCategoryTreeSnapshot();
+  const keywordsConfig = (appConfig.keywords || {}) as Record<string, unknown>;
+  if (keywordsConfig.categoryRefreshEnabled !== false) {
+    const categoryCron = String(keywordsConfig.categoryRefreshCron || '0 0 4 1 * *');
+    cron.schedule(categoryCron, () => {
+      logger.info('Running scheduled shopping category tree refresh');
+      void refreshDatalabCategoryTree({
+        maxDepth: 4,
+        onSave: (tree) => saveShoppingCategoryTree(tree, 'datalab'),
+      });
+    });
+    logger.info({ cron: categoryCron }, 'Shopping category monthly refresh scheduled');
   }
 
   // Create Fastify app

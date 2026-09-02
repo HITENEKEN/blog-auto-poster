@@ -47,6 +47,7 @@ export default function RichEditor({ content, onUpdate, mode, onWidgetEdit }: Ri
   const [widgetDialog, setWidgetDialog] = useState<WidgetDialogState | null>(null);
   const [widgetUrl, setWidgetUrl] = useState('');
   const [widgetText, setWidgetText] = useState('');
+  const [widgetImageUrl, setWidgetImageUrl] = useState('');
   const [widgetSnippet, setWidgetSnippet] = useState('');
 
   const onUpdateRef = useRef(onUpdate);
@@ -68,6 +69,7 @@ export default function RichEditor({ content, onUpdate, mode, onWidgetEdit }: Ri
           }
           setWidgetUrl(payload.props.url ?? '');
           setWidgetText(payload.props.text ?? '');
+          setWidgetImageUrl(payload.props.imageUrl ?? '');
           setWidgetSnippet(payload.props.snippet ?? '');
           setWidgetDialog({
             kind: payload.kind as CoupangWidgetKind,
@@ -114,15 +116,21 @@ export default function RichEditor({ content, onUpdate, mode, onWidgetEdit }: Ri
   const openInsertDialog = (kind: CoupangWidgetKind) => {
     setWidgetUrl('');
     setWidgetText('');
+    setWidgetImageUrl('');
     setWidgetSnippet('');
     setWidgetDialog({ kind, props: {} });
   };
 
   const handleWidgetConfirm = () => {
     if (!widgetDialog) return;
-    const props: CoupangWidgetProps = LINK_KINDS.includes(widgetDialog.kind)
-      ? { url: widgetUrl.trim(), text: widgetText.trim() }
-      : { snippet: widgetSnippet };
+    // 링크류 위젯은 표시 텍스트가 비어 발행 시 유실되지 않도록 기본 라벨을 부여한다(이슈 #10).
+    const defaultLinkText = widgetDialog.kind === 'event-link' ? '이벤트 확인하기' : '상품 보기';
+    const props: CoupangWidgetProps =
+      widgetDialog.kind === 'ad-banner'
+        ? { url: widgetUrl.trim(), imageUrl: widgetImageUrl.trim(), text: widgetText.trim() }
+        : LINK_KINDS.includes(widgetDialog.kind)
+          ? { url: widgetUrl.trim(), text: widgetText.trim() || defaultLinkText }
+          : { snippet: widgetSnippet };
     if (widgetDialog.update) {
       widgetDialog.update(props);
     } else {
@@ -132,9 +140,17 @@ export default function RichEditor({ content, onUpdate, mode, onWidgetEdit }: Ri
   };
 
   const isLinkKind = widgetDialog ? LINK_KINDS.includes(widgetDialog.kind) : false;
+  const isBannerKind = widgetDialog?.kind === 'ad-banner';
   const widgetKinds: CoupangWidgetKind[] =
     mode === 'post'
-      ? ['product-link', 'event-link', 'dynamic-banner', 'search-widget', 'category-banner']
+      ? [
+          'product-link',
+          'event-link',
+          'dynamic-banner',
+          'search-widget',
+          'category-banner',
+          'ad-banner',
+        ]
       : ['product-link', 'dynamic-banner', 'search-widget', 'category-banner'];
 
   return (
@@ -225,7 +241,7 @@ export default function RichEditor({ content, onUpdate, mode, onWidgetEdit }: Ri
       {/* Editor body */}
       <EditorContent
         editor={editor}
-        className="prose-coupang max-w-none p-4 [&_.ProseMirror]:min-h-[400px] [&_.ProseMirror]:outline-none [&_.ProseMirror_img]:max-w-full [&_.ProseMirror_h1]:text-2xl [&_.ProseMirror_h1]:font-bold [&_.ProseMirror_h2]:text-xl [&_.ProseMirror_h2]:font-bold [&_.ProseMirror_h3]:text-lg [&_.ProseMirror_h3]:font-semibold [&_.ProseMirror_ul]:list-disc [&_.ProseMirror_ul]:pl-6 [&_.ProseMirror_ol]:list-decimal [&_.ProseMirror_ol]:pl-6 [&_.ProseMirror_a]:text-primary [&_.ProseMirror_a]:underline"
+        className="prose-coupang max-w-none p-4 [&_.ProseMirror]:min-h-[400px] [&_.ProseMirror]:outline-none [&_.ProseMirror]:leading-[1.9] [&_.ProseMirror_p]:my-3 [&_.ProseMirror_p]:leading-[1.9] [&_.ProseMirror_img]:max-w-full [&_.ProseMirror_h1]:text-2xl [&_.ProseMirror_h1]:font-bold [&_.ProseMirror_h1]:mt-6 [&_.ProseMirror_h1]:mb-3 [&_.ProseMirror_h2]:text-xl [&_.ProseMirror_h2]:font-bold [&_.ProseMirror_h2]:mt-6 [&_.ProseMirror_h2]:mb-3 [&_.ProseMirror_h3]:text-lg [&_.ProseMirror_h3]:font-semibold [&_.ProseMirror_h3]:mt-5 [&_.ProseMirror_h3]:mb-2 [&_.ProseMirror_ul]:list-disc [&_.ProseMirror_ul]:pl-6 [&_.ProseMirror_ul]:my-3 [&_.ProseMirror_ol]:list-decimal [&_.ProseMirror_ol]:pl-6 [&_.ProseMirror_ol]:my-3 [&_.ProseMirror_a]:text-primary [&_.ProseMirror_a]:underline"
       />
 
       {/* Widget insert/edit dialog */}
@@ -250,7 +266,41 @@ export default function RichEditor({ content, onUpdate, mode, onWidgetEdit }: Ri
           </>
         }
       >
-        {widgetDialog && isLinkKind ? (
+        {widgetDialog && isBannerKind ? (
+          <div className="space-y-3">
+            <p className="text-xs text-muted-foreground">
+              배너 이미지 URL과 클릭 시 이동할 링크 URL을 입력하세요. 대체텍스트는 이미지 alt로
+              사용되며 캡션으로도 표시됩니다(선택).
+            </p>
+            <label className="block text-sm font-medium">
+              이미지 URL
+              <Input
+                className="mt-1"
+                placeholder="https://example.com/banner.jpg"
+                value={widgetImageUrl}
+                onChange={(e) => setWidgetImageUrl(e.target.value)}
+              />
+            </label>
+            <label className="block text-sm font-medium">
+              링크 URL
+              <Input
+                className="mt-1"
+                placeholder="https://link.coupang.com/..."
+                value={widgetUrl}
+                onChange={(e) => setWidgetUrl(e.target.value)}
+              />
+            </label>
+            <label className="block text-sm font-medium">
+              대체텍스트·캡션 (선택)
+              <Input
+                className="mt-1"
+                placeholder="광고 상품 배너"
+                value={widgetText}
+                onChange={(e) => setWidgetText(e.target.value)}
+              />
+            </label>
+          </div>
+        ) : widgetDialog && isLinkKind ? (
           <div className="space-y-3">
             <p className="text-xs text-muted-foreground">
               쿠팡 파트너스에서 생성한 링크 URL과 표시할 텍스트를 입력하세요.

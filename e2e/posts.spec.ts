@@ -55,6 +55,25 @@ test.describe('posts', () => {
     const postId = genBody.post?.id;
     expect(postId, `generate-from-keyword failed: ${genBody.error}`).toBeTruthy();
 
+    // 비동기 계약(routes/index.ts:1040-1099): POST는 드래프트 id만 즉시 반환하고
+    // 실제 생성(LLM 폴백→렌더→저장)은 백그라운드에서 완료된다. 본문을 단언·수정하기
+    // 전에 백그라운드 완료를 폴링으로 기다린다 — 완료 전 PUT은 백그라운드 저장에
+    // 덮어쓰일 수 있다. e2e에선 LLM 키가 없어 수십 ms 만에 완료된다.
+    await expect
+      .poll(
+        async () => {
+          const pollRes = await page.request.get('/api/posts/drafts', {
+            headers: authHeaders(token),
+          });
+          const pollBody = (await pollRes.json()) as {
+            drafts: Array<{ id: string; generationStatus?: string }>;
+          };
+          return pollBody.drafts.find((d) => d.id === postId)?.generationStatus;
+        },
+        { timeout: 90_000, intervals: [100, 250, 1000, 5000] },
+      )
+      .toBe('done');
+
     // --- GET /api/posts/:id → content contains keyword + affiliate disclosure ---
     const getRes = await page.request.get(`/api/posts/${postId}`, {
       headers: authHeaders(token),
@@ -124,6 +143,23 @@ test.describe('posts', () => {
     const genBody = (await genRes.json()) as { post?: { id?: string } };
     const postId = genBody.post?.id;
     expect(postId).toBeTruthy();
+
+    // 비동기 계약: 백그라운드 생성 완료 전 PUT하면 저장이 배경 저장으로 덮어쓰인다 —
+    // 종료 상태까지 폴링(posts.spec 두 번째 테스트와 동일한 근거).
+    await expect
+      .poll(
+        async () => {
+          const pollRes = await page.request.get('/api/posts/drafts', {
+            headers: authHeaders(token),
+          });
+          const pollBody = (await pollRes.json()) as {
+            drafts: Array<{ id: string; generationStatus?: string }>;
+          };
+          return pollBody.drafts.find((d) => d.id === postId)?.generationStatus;
+        },
+        { timeout: 90_000, intervals: [100, 250, 1000, 5000] },
+      )
+      .toBe('done');
     const widgetProps = encodeURIComponent(
       JSON.stringify({ url: 'https://link.coupang.com/a/e2e', text: '무선청소기 최저가' }),
     );

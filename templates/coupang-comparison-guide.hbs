@@ -27,12 +27,13 @@ jsonLd:
 
 <div class="ccg-wrap">
 <style>
-.ccg-wrap{max-width:760px;margin:0 auto;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI','Noto Sans KR',sans-serif;line-height:1.8;color:#333;padding:16px}
+.ccg-wrap{max-width:760px;margin:0 auto;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI','Noto Sans KR',sans-serif;font-size:1.05rem;line-height:2.0;color:#333;padding:16px}
+.ccg-section p{margin:0 0 16px}
 .ccg-header h1{font-size:1.5rem;line-height:1.4;margin:0 0 8px;color:#212529}
 .ccg-sub{color:#868e96;font-size:.9rem;margin-bottom:20px}
 .ccg-section{margin-bottom:32px}
-.ccg-section h2{font-size:1.25rem;border-bottom:2px solid #1971c2;padding-bottom:8px;margin-bottom:16px}
-.ccg-experience{background:#e7f1ff;border-left:4px solid #1e88e5;padding:14px 18px;border-radius:6px;margin-bottom:24px;font-size:15px;color:#1a3a5c;white-space:pre-line}
+.ccg-section h2{font-size:1.4rem;border-bottom:2px solid #1971c2;padding-bottom:10px;margin-bottom:20px}
+.ccg-experience{background:#e7f1ff;border-left:5px solid #1e88e5;padding:16px 20px;border-radius:0 8px 8px 0;margin-bottom:24px;font-size:1.05rem;color:#1a3a5c;white-space:pre-line}
 .ccg-product-card{background:#fff;border:1px solid #dee2e6;border-radius:10px;overflow:hidden;margin-bottom:20px}
 .ccg-product-rank{background:#1971c2;color:#fff;display:inline-block;padding:4px 14px;font-weight:700;font-size:.9rem}
 .ccg-product-body{padding:18px}
@@ -46,9 +47,10 @@ jsonLd:
 .ccg-cta{display:block;background:#1971c2;color:#fff;text-align:center;padding:11px;border-radius:6px;text-decoration:none;font-weight:600;font-size:.95rem}
 .ccg-cta:hover{opacity:.88}
 .ccg-table{width:100%;border-collapse:collapse;margin-bottom:20px}
-.ccg-table th{background:#f8f9fa;padding:10px 12px;border:1px solid #dee2e6;font-weight:600;text-align:center}
-.ccg-table td{padding:10px 12px;border:1px solid #dee2e6;font-size:.92rem;text-align:center}
+.ccg-table th{background:#f8f9fa;padding:12px 14px;border:1px solid #dee2e6;font-weight:600;text-align:center}
+.ccg-table td{padding:12px 14px;border:1px solid #dee2e6;font-size:.95rem;text-align:center}
 .ccg-table td:first-child{text-align:left;font-weight:500;background:#fafafa;width:25%}
+.ccg-table tr:nth-child(even) td{background:#fcfcfd}
 .ccg-best{background:#fff9db;border:2px solid #fab005;border-radius:10px;padding:16px 20px;margin:20px 0}
 .ccg-best-label{font-weight:700;color:#e67700;font-size:.95rem;margin-bottom:6px}
 .ccg-why{background:#f1f8e9;border-radius:8px;padding:14px 16px;font-size:15px;color:#33691e;white-space:pre-line}
@@ -60,13 +62,23 @@ jsonLd:
 .ccg-faq-q{font-weight:600;margin-bottom:4px}
 .ccg-faq-a{color:#495057;font-size:.93rem;margin-bottom:14px}
 .ccg-tips{background:#fffde7;border-radius:8px;padding:14px 16px}
-.ccg-tips li{margin-bottom:8px;font-size:.93rem}
+.ccg-tips li{margin-bottom:10px;font-size:.98rem}
 .ccg-checklist{background:#e8f5e9;border-radius:8px;padding:14px 16px;list-style:none}
-.ccg-checklist li{margin-bottom:8px;font-size:.93rem}
+.ccg-checklist li{margin-bottom:10px;font-size:.98rem}
 .ccg-checklist li::before{content:"☐ "}
 .ccg-notice{margin-top:28px;padding-top:14px;border-top:1px solid #eee}
 .ccg-notice small{color:#adb5bd;font-size:.78rem}
 @media(max-width:600px){.ccg-header h1{font-size:1.25rem}.ccg-table{font-size:.82rem}.ccg-table th,.ccg-table td{padding:6px}}
+.section-image{margin:28px 0}
+.section-image img{display:block;max-width:100%;border-radius:10px;box-shadow:0 4px 14px rgba(0,0,0,.12);margin:0 auto}
+.section-image figcaption{margin-top:10px;font-size:.88rem;color:#868e96;text-align:center}
+
+/* ── 스타일 고도화(공통, 이슈 #10): 더 화려한 발행물 ── */
+.ccg-section{background:#fff;border:1px solid #f1f3f5;border-radius:14px;padding:18px 20px;box-shadow:0 2px 10px rgba(0,0,0,.05)}
+.ccg-section h2{background:linear-gradient(90deg,#e7f5ff,#d3f9d8);padding:8px 12px;border-radius:0 8px 8px 0}
+.ccg-wrap strong{background:linear-gradient(180deg,transparent 62%,#a5d8ff 62%)}
+.ccg-cta{background:linear-gradient(135deg,#1c7ed6,#0ca678);box-shadow:0 4px 12px rgba(28,126,214,.35);letter-spacing:-.02em}
+.ccg-best{box-shadow:0 6px 18px rgba(28,126,214,.18)}
 </style>
 
 <div class="ccg-disclosure" style="font-size:.85rem;color:#868e96;margin:0 0 16px;">
@@ -107,6 +119,13 @@ jsonLd:
 {{/each}}
 </table>
 </div>
+
+{{#if sectionImages.compare}}
+<figure class="section-image">
+<img src="{{sectionImages.compare}}" alt="한눈에 보는 비교표" loading="lazy" />
+<figcaption>한눈에 보는 비교표</figcaption>
+</figure>
+{{/if}}
 
 <!-- 개별 제품 카드 -->
 {{#each products}}
@@ -178,6 +197,13 @@ jsonLd:
 </div>
 {{/if}}
 
+{{#if sectionImages.usage}}
+<figure class="section-image">
+<img src="{{sectionImages.usage}}" alt="제가 이걸로 골라본 경험" loading="lazy" />
+<figcaption>제가 이걸로 골라본 경험</figcaption>
+</figure>
+{{/if}}
+
 <!-- 최종 추천 -->
 {{#if recommendations}}
 <div class="ccg-section">
@@ -199,6 +225,13 @@ jsonLd:
 {{#each usageTips}}<li>{{this}}</li>{{/each}}
 </ul>
 </div>
+{{/if}}
+
+{{#if sectionImages.tips}}
+<figure class="section-image">
+<img src="{{sectionImages.tips}}" alt="실전 활용 팁" loading="lazy" />
+<figcaption>실전 활용 팁</figcaption>
+</figure>
 {{/if}}
 {{#if buyingChecklist}}
 <div class="ccg-section">

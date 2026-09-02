@@ -1,3 +1,4 @@
+import * as fs from 'fs';
 import { createHttpClient } from '@core/http';
 import { getLogger } from '@core/logger';
 import { getConfigManager } from '@core/config';
@@ -17,6 +18,8 @@ import {
   ValidationError,
 } from '@core/errors';
 import { postToNaverBlog, shouldUseBrowserMode } from './NaverBrowserPoster';
+import { inlineStyleBlocks } from '@content/StyleInliner';
+import { prepareNaverHtml } from '@content/NaverHtml';
 
 const logger = getLogger('naver-adapter');
 
@@ -167,13 +170,31 @@ export class NaverAdapter implements PlatformAdapter {
     // when no accessToken is configured. Create-only — updates keep the API path.
     if (shouldUseBrowserMode(cfg)) {
       try {
+        // #9: 네이버 에디터는 <style> 블록을 제거하므로, CSS 규칙을 요소 인라인
+        // style로 변환해 줄간격/꾸밈이 발행물에 그대로 반영되게 한다.
+        const inlinedHtml = inlineStyleBlocks(content.content);
+        // #10: SE 붙여넣기 파서가 heading 태그를 평문으로 평탄화하고 script를
+        // 제거하므로, 발행 전에 인라인 스타일 제목으로 변환하고 script를 걷어낸다.
+        const naverHtml = prepareNaverHtml(inlinedHtml);
+        // #7: 에디터에 업로드할 로컬 이미지 경로 (존재하는 파일만, 첫 항목 = 대표 이미지)
+        const imagePaths = (content.images ?? [])
+          .map((img) => String(img.localPath ?? ''))
+          .filter((p) => p !== '')
+          .filter((p) => {
+            try {
+              return fs.existsSync(p) && fs.statSync(p).isFile();
+            } catch {
+              return false;
+            }
+          });
         const result = await postToNaverBlog({
           blogId,
           title: content.title,
-          html: content.content,
+          html: naverHtml,
           tags: content.tags,
           visibility: content.visibility === 'private' ? 'private' : 'public',
           headless: true,
+          images: imagePaths,
         });
         return { postId: result.postId, url: result.url, publishedAt: new Date() };
       } catch (error) {

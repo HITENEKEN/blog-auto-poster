@@ -130,6 +130,8 @@ export class PostAssembler {
       seoDescription: seoData?.description,
       seoKeywords: seoData?.keywords,
       jsonLd: seoData?.jsonLd,
+      // R5 이미지 슬롯: 섹션키 → 이미지 경로 매핑 (이미지 없으면 템플릿 슬롯이 소멸)
+      sectionImages: images?.sectionImages ?? {},
     };
 
     // Benchmark: inject top-ranking Naver blog posts for the keyword as an

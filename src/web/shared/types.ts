@@ -104,6 +104,8 @@ export interface PostSummary {
   jobId?: string;
   platform: string;
   postId: string;
+  /** 편집화면 재진입/재발행용 드래프트 디렉터리 id (이슈 #10). 없으면 null. */
+  draftId?: string | null;
   url: string;
   title: string;
   template: string;

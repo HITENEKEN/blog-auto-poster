@@ -52,6 +52,13 @@ seo:
 </ol>
 </div>
 
+{{#if sectionImages.checklist}}
+<figure class="section-image">
+<img src="{{sectionImages.checklist}}" alt="구매 전 필수 체크리스트" loading="lazy" />
+<figcaption>구매 전 필수 체크리스트</figcaption>
+</figure>
+{{/if}}
+
 <!-- 예산별 추천 -->
 {{#if budgetSteps}}
 <div class="cbg-section">
@@ -87,6 +94,13 @@ seo:
 <h2>제가 이걸로 골라본 경험</h2>
 <div class="cbg-why">{{whyIChoseIt}}</div>
 </div>
+{{/if}}
+
+{{#if sectionImages.usage}}
+<figure class="section-image">
+<img src="{{sectionImages.usage}}" alt="제가 이걸로 골라본 경험" loading="lazy" />
+<figcaption>제가 이걸로 골라본 경험</figcaption>
+</figure>
 {{/if}}
 
 <!-- 인사이트: 검색/쇼핑 트렌드 (선택) -->
@@ -138,6 +152,14 @@ seo:
 </ul>
 </div>
 {{/if}}
+
+{{#if sectionImages.tips}}
+<figure class="section-image">
+<img src="{{sectionImages.tips}}" alt="실전 활용 팁" loading="lazy" />
+<figcaption>실전 활용 팁</figcaption>
+</figure>
+{{/if}}
+
 {{#if buyingChecklist}}
 <div class="cbg-section">
 <h2>구매 전 체크리스트</h2>
@@ -172,15 +194,16 @@ seo:
 </div>
 
 <style>
-.cbg-wrap{max-width:760px;margin:0 auto;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI','Noto Sans KR',sans-serif;line-height:1.8;color:#333;padding:16px}
+.cbg-wrap{max-width:760px;margin:0 auto;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI','Noto Sans KR',sans-serif;font-size:1.05rem;line-height:2.0;color:#333;padding:16px}
+.cbg-section p{margin:0 0 16px}
 .cbg-header h1{font-size:1.5rem;line-height:1.4;margin:0 0 8px;color:#212529}
 .cbg-sub{color:#868e96;font-size:.9rem;margin-bottom:20px}
-.cbg-section{margin-bottom:32px}
-.cbg-section h2{font-size:1.25rem;border-bottom:2px solid #7048e8;padding-bottom:8px;margin-bottom:16px}
-.cbg-intro{background:#f3f0ff;border-left:4px solid #7048e8;padding:14px 18px;border-radius:6px;margin-bottom:24px;font-size:15px;color:#495057}
-.cbg-experience{background:#e7f1ff;border-left:4px solid #1e88e5;padding:14px 18px;border-radius:6px;margin-bottom:24px;font-size:15px;color:#1a3a5c;white-space:pre-line}
+.cbg-section{margin-bottom:36px}
+.cbg-section h2{font-size:1.4rem;border-bottom:2px solid #7048e8;padding-bottom:10px;margin-bottom:20px}
+.cbg-intro{background:#f3f0ff;border-left:5px solid #7048e8;padding:16px 20px;border-radius:0 8px 8px 0;margin-bottom:24px;font-size:1.05rem;color:#495057}
+.cbg-experience{background:#e7f1ff;border-left:5px solid #1e88e5;padding:16px 20px;border-radius:0 8px 8px 0;margin-bottom:24px;font-size:1.05rem;color:#1a3a5c;white-space:pre-line}
 .cbg-checklist{list-style:none;padding:0;counter-reset:check}
-.cbg-checklist li{counter-increment:check;margin-bottom:14px;padding-left:44px;position:relative}
+.cbg-checklist li{counter-increment:check;margin-bottom:16px;padding-left:44px;position:relative}
 .cbg-checklist li::before{content:'✓';position:absolute;left:0;top:2px;width:30px;height:30px;background:#7048e8;color:#fff;border-radius:50%;display:flex;align-items:center;justify-content:center;font-weight:700;font-size:14px}
 .cbg-checklist li strong{display:block;color:#212529;margin-bottom:2px}
 .cbg-budget{background:#fff;border:1px solid #dee2e6;border-radius:10px;overflow:hidden;margin-bottom:14px}
@@ -190,24 +213,35 @@ seo:
 .cbg-reason{font-size:.93rem;color:#495057;margin-bottom:10px}
 .cbg-cta-sm{display:inline-block;background:#7048e8;color:#fff;padding:9px 22px;border-radius:6px;text-decoration:none;font-size:.92rem;font-weight:600}
 .cbg-cta-sm:hover{opacity:.88}
-.cbg-mistake{border-left:3px solid #e03131;padding:10px 14px;background:#fff5f5;border-radius:0 6px 6px 0;margin-bottom:12px}
+.cbg-mistake{border-left:4px solid #e03131;padding:12px 16px;background:#fff5f5;border-radius:0 6px 6px 0;margin-bottom:12px}
 .cbg-mistake-title{font-weight:600;color:#c92a2a;font-size:.95rem;margin-bottom:4px}
 .cbg-mistake-desc{font-size:.9rem;color:#495057}
 .cbg-faq-q{font-weight:600;margin-bottom:4px}
 .cbg-faq-a{color:#495057;font-size:.93rem;margin-bottom:14px}
 .cbg-tips{background:#fffde7;border-radius:8px;padding:14px 16px}
-.cbg-tips li{margin-bottom:8px;font-size:.93rem}
+.cbg-tips li{margin-bottom:10px;font-size:.98rem}
 .cbg-buycheck{background:#e8f5e9;border-radius:8px;padding:14px 16px;list-style:none}
-.cbg-buycheck li{margin-bottom:8px;font-size:.93rem}
+.cbg-buycheck li{margin-bottom:10px;font-size:.98rem}
 .cbg-buycheck li::before{content:"☐ "}
-.cbg-why{background:#f1f8e9;border-radius:8px;padding:14px 16px;font-size:15px;color:#33691e;white-space:pre-line}
+.cbg-why{background:#f1f8e9;border-radius:8px;padding:14px 16px;font-size:1.05rem;color:#33691e;white-space:pre-line}
 .cbg-benchmarks{background:#f7f7fb;border:1px solid #e0e0ef;border-radius:8px;padding:14px 16px}
 .cbg-benchmarks ul{margin:0 0 10px;padding-left:20px}
-.cbg-benchmarks li{margin:6px 0}
+.cbg-benchmarks li{margin:8px 0}
 .cbg-benchmarks a{color:#4527a0;text-decoration:none}
 .cbg-benchmarks a:hover{text-decoration:underline}
 .cbg-final{text-align:center;margin:32px 0;padding:22px;background:#f3f0ff;border-radius:10px;font-size:1.05rem}
 .cbg-notice{margin-top:28px;padding-top:14px;border-top:1px solid #eee}
 .cbg-notice small{color:#adb5bd;font-size:.78rem}
+/* 본문 섹션 이미지 (R5) */
+.section-image{margin:28px 0}
+.section-image img{display:block;max-width:100%;border-radius:10px;box-shadow:0 4px 14px rgba(0,0,0,.12);margin:0 auto}
+.section-image figcaption{margin-top:10px;font-size:.88rem;color:#868e96;text-align:center}
 @media(max-width:600px){.cbg-header h1{font-size:1.25rem}}
+
+/* ── 스타일 고도화(공통, 이슈 #10): 더 화려한 발행물 ── */
+.cbg-section{background:#fff;border:1px solid #f1f3f5;border-radius:14px;padding:18px 20px;box-shadow:0 2px 10px rgba(0,0,0,.05)}
+.cbg-section h2{background:linear-gradient(90deg,#f3f0ff,#e7f1ff);padding:8px 12px;border-radius:0 8px 8px 0}
+.cbg-wrap strong{background:linear-gradient(180deg,transparent 62%,#d0bfff 62%)}
+.cbg-best{box-shadow:0 6px 18px rgba(112,72,232,.18)}
+.cbg-cta-sm{background:linear-gradient(135deg,#7048e8,#1c7ed6);box-shadow:0 4px 12px rgba(112,72,232,.35);letter-spacing:-.02em}
 </style>

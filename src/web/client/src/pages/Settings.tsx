@@ -45,9 +45,9 @@ interface SettingsData {
     };
   };
   imageProviders: {
-    dalle: { apiKey: string; model: string };
-    stableDiffusion: { apiKey: string; apiUrl: string };
-    gemini: { apiKey: string; model: string };
+    gemini: { enabled: boolean; apiKey: string; model: string };
+    openai: { enabled: boolean; apiKey: string; model: string };
+    provider: string;
   };
   llm: { provider: string; apiKey: string; model: string; baseUrl: string };
   notifications: {
@@ -74,9 +74,9 @@ const defaultSettings: SettingsData = {
     },
   },
   imageProviders: {
-    dalle: { apiKey: '', model: 'dall-e-3' },
-    stableDiffusion: { apiKey: '', apiUrl: 'https://api.stability.ai' },
-    gemini: { apiKey: '', model: 'gemini-1.5-pro' },
+    gemini: { enabled: false, apiKey: '', model: 'gemini-1.5-pro' },
+    openai: { enabled: false, apiKey: '', model: 'gpt-image-1' },
+    provider: 'openai',
   },
   llm: { provider: 'gemini', apiKey: '', model: 'gemini-1.5-pro', baseUrl: '' },
   notifications: { email: '', slackWebhook: '', discordWebhook: '' },
@@ -112,9 +112,9 @@ function toServerPayload(section: string, settings: SettingsData): Record<string
     case 'imageProviders':
       return {
         imageProviders: {
-          dalle: settings.imageProviders.dalle,
-          'stable-diffusion': settings.imageProviders.stableDiffusion,
           gemini: settings.imageProviders.gemini,
+          openai: settings.imageProviders.openai,
+          provider: settings.imageProviders.provider,
         },
       };
     case 'llm':
@@ -146,9 +146,9 @@ interface ServerConfig {
   };
   llm?: { provider?: string; apiKey?: string; model?: string; baseUrl?: string };
   imageProviders?: {
-    dalle?: { apiKey?: string; model?: string };
-    'stable-diffusion'?: { apiKey?: string; apiUrl?: string };
-    gemini?: { apiKey?: string; model?: string };
+    gemini?: { enabled?: boolean; apiKey?: string; model?: string };
+    openai?: { enabled?: boolean; apiKey?: string; model?: string };
+    provider?: string;
   };
 }
 
@@ -203,16 +203,6 @@ function hydrateFromConfig(cfg: ServerConfig | undefined, base: SettingsData): S
       useBrowser: p.naver.useBrowser === true,
     };
   const ip = cfg?.imageProviders || {};
-  if (ip.dalle)
-    next.imageProviders.dalle = {
-      apiKey: ip.dalle.apiKey ?? '',
-      model: ip.dalle.model ?? 'dall-e-3',
-    };
-  if (ip['stable-diffusion'])
-    next.imageProviders.stableDiffusion = {
-      apiKey: ip['stable-diffusion'].apiKey ?? '',
-      apiUrl: ip['stable-diffusion'].apiUrl ?? 'https://api.stability.ai',
-    };
   const llm = cfg?.llm;
   if (llm)
     next.llm = {
@@ -227,9 +217,27 @@ function hydrateFromConfig(cfg: ServerConfig | undefined, base: SettingsData): S
     };
   if (ip.gemini)
     next.imageProviders.gemini = {
+      // enabled는 이미지 게이팅 플래그(resolveGeminiImageConfig)라 마스킹 대상이 아니며,
+      // 리졸버와 동일하게 '명시되지 않으면 사용'으로 복원한다(enabled !== false).
+      enabled: ip.gemini.enabled !== false,
       apiKey: ip.gemini.apiKey ?? '',
       model: ip.gemini.model ?? 'gemini-1.5-pro',
     };
+  // '이미지 생성 AI' 섹션: OpenAI(gpt-image-1) 1순위, gemini 폴백 — resolveGeminiImageConfig의
+  // 게이팅(enabled !== false && apiKey)과 동일한 규칙으로 enabled를 복원한다.
+  const ipOpenai = ip.openai || {};
+  next.imageProviders.openai = {
+    enabled: Boolean(ip.openai) && ipOpenai.enabled !== false,
+    apiKey: ipOpenai.apiKey ?? '',
+    model: ipOpenai.model ?? 'gpt-image-1',
+  };
+  // 공급자 선택은 UI 상태 키(imageProviders.provider). 없으면 openai enabled 플래그에서 유추.
+  next.imageProviders.provider =
+    ip.provider === 'openai' || ip.provider === 'gemini'
+      ? ip.provider
+      : next.imageProviders.openai.enabled
+        ? 'openai'
+        : 'gemini';
   return next;
 }
 
@@ -321,7 +329,7 @@ export default function Settings() {
     });
   };
 
-  // 프로바이더 변경: provider 교체 + (필요하면) 모델/baseUrl을 새 프로바이더 기본 값으로 정리.
+  // 프로바이더 변경: provider 교체 + 모델/baseUrl을 새 프로바이더 기본 값으로 정리.
   const handleProviderChange = (v: string) => {
     handleChange('llm', 'provider', v);
     const nextOpt = LLM_PROVIDER_OPTIONS.find((o) => o.value === v);
@@ -330,12 +338,14 @@ export default function Settings() {
     if (nextOpt && (!settings.llm.model || settings.llm.model === prevOpt?.defaultModel)) {
       handleChange('llm', 'model', nextOpt.defaultModel);
     }
-    // baseUrl이 다른 프로바이더의 기본 URL이면 리셋('' = 프로바이더 기본 사용).
-    if (nextOpt && settings.llm.baseUrl) {
-      const stale = LLM_PROVIDER_OPTIONS.some(
-        (o) => o.value !== v && o.defaultBaseUrl === settings.llm.baseUrl,
-      );
-      if (stale) handleChange('llm', 'baseUrl', '');
+    // baseUrl은 새 프로바이더의 기본값으로 되따라간다('' = 서버가 프로바이더 기본 사용).
+    // 기존에는 "다른 프로바이더의 기본 URL과 정확히 일치할 때만" 리셋했기 때문에
+    // https://api.deepseek.com 처럼 /v1 이 누락된 변형 URL이 남아 프로바이더를
+    // 바꿔도 계속 deepseek 엔드포인트로 요청되는 버그가 있었다. 서버는 llm.baseUrl이
+    // 비어있지 않으면 프로바이더 기본 주소보다 우선하므로, 프로바이더를 바꿨으면
+    // baseUrl을 반드시 새 기본값으로 되돌린다(커스텀 게이트웨이는 저장 후 다시 입력).
+    if (nextOpt) {
+      handleChange('llm', 'baseUrl', nextOpt.defaultBaseUrl);
     }
   };
 
@@ -374,17 +384,30 @@ export default function Settings() {
     }
   };
 
+  // 이미지 생성 AI 공급자 변경: 게이팅 우선순위가 openai → gemini
+  // (resolveGeminiImageConfig)이므로, 선택이 실제 반영되려면 enabled 플래그를 함께 맞춘다.
+  const handleImageAiProviderChange = (v: string) => {
+    handleChange('imageProviders', 'provider', v);
+    if (v === 'openai') {
+      handleChange('imageProviders.openai', 'enabled', true);
+    } else {
+      handleChange('imageProviders.openai', 'enabled', false);
+      handleChange('imageProviders.gemini', 'enabled', true);
+    }
+  };
+
   const renderInput = (
     section: string,
     field: string,
     label: string,
     type: string = 'text',
     placeholder = '',
+    id?: string,
   ) => (
     <div className="space-y-1">
-      <Label htmlFor={field}>{label}</Label>
+      <Label htmlFor={id ?? field}>{label}</Label>
       <Input
-        id={field}
+        id={id ?? field}
         type={type}
         value={String(getNested(settings, String(section).split('.').concat(field)) ?? '')}
         onChange={(e) => handleChange(section, field, e.target.value)}
@@ -416,13 +439,13 @@ export default function Settings() {
             <Globe className="h-4 w-4 mr-2" />
             블로그 플랫폼
           </TabsTrigger>
-          <TabsTrigger value="images">
-            <Shield className="h-4 w-4 mr-2" />
-            이미지 생성
-          </TabsTrigger>
           <TabsTrigger value="llm">
             <Sparkles className="h-4 w-4 mr-2" />
             AI 글쓰기 (LLM)
+          </TabsTrigger>
+          <TabsTrigger value="imageAI">
+            <Shield className="h-4 w-4 mr-2" />
+            이미지 생성 AI
           </TabsTrigger>
           <TabsTrigger value="notifications">
             <Bell className="h-4 w-4 mr-2" />
@@ -588,45 +611,6 @@ export default function Settings() {
           </Button>
         </TabsContent>
 
-        <TabsContent value="images" className="mt-4 space-y-4">
-          {['dalle', 'stableDiffusion', 'gemini'].map((provider) => (
-            <Card key={provider}>
-              <CardHeader>
-                <CardTitle>
-                  {provider === 'dalle'
-                    ? 'DALL-E'
-                    : provider === 'stableDiffusion'
-                      ? 'Stable Diffusion'
-                      : 'Gemini'}
-                </CardTitle>
-              </CardHeader>
-              <CardContent className="grid gap-4 md:grid-cols-2">
-                {Object.keys(
-                  settings.imageProviders[provider as keyof typeof settings.imageProviders],
-                ).map((field) =>
-                  renderInput(
-                    `imageProviders.${provider}`,
-                    field,
-                    field,
-                    field.includes('Key') ? 'password' : 'text',
-                  ),
-                )}
-              </CardContent>
-            </Card>
-          ))}
-          <Button
-            onClick={() => handleSave('imageProviders')}
-            disabled={saving === 'imageProviders'}
-          >
-            {saving === 'imageProviders' ? (
-              <RefreshCw className="h-4 w-4 animate-spin mr-2" />
-            ) : (
-              <Save className="h-4 w-4 mr-2" />
-            )}
-            저장
-          </Button>
-        </TabsContent>
-
         <TabsContent value="llm" className="mt-4 space-y-4">
           <Card>
             <CardHeader>
@@ -753,6 +737,96 @@ export default function Settings() {
               연결 테스트
             </Button>
           </div>
+        </TabsContent>
+
+        <TabsContent value="imageAI" className="mt-4 space-y-4">
+          <Card>
+            <CardHeader>
+              <CardTitle>이미지 생성 AI</CardTitle>
+            </CardHeader>
+            <CardContent className="grid gap-4 md:grid-cols-2">
+              <div className="space-y-1">
+                <Label htmlFor="imageAiProvider">공급자</Label>
+                <Select
+                  id="imageAiProvider"
+                  value={settings.imageProviders.provider}
+                  onChange={(e) => handleImageAiProviderChange(e.target.value)}
+                >
+                  <option value="openai">OpenAI (gpt-image-1)</option>
+                  <option value="gemini">Gemini</option>
+                </Select>
+              </div>
+              <div className="space-y-1">
+                <Label htmlFor="imageAiEnabled">사용 여부</Label>
+                <Select
+                  id="imageAiEnabled"
+                  value={
+                    (
+                      settings.imageProviders.provider === 'openai'
+                        ? settings.imageProviders.openai.enabled
+                        : settings.imageProviders.gemini.enabled
+                    )
+                      ? 'on'
+                      : 'off'
+                  }
+                  onChange={(e) =>
+                    handleChange(
+                      `imageProviders.${settings.imageProviders.provider}`,
+                      'enabled',
+                      e.target.value === 'on',
+                    )
+                  }
+                >
+                  <option value="on">사용</option>
+                  <option value="off">사용 안 함</option>
+                </Select>
+              </div>
+              {renderInput(
+                `imageProviders.${settings.imageProviders.provider}`,
+                'model',
+                '모델',
+                'text',
+                settings.imageProviders.provider === 'openai'
+                  ? 'gpt-image-1'
+                  : '이미지 생성 지원 모델',
+                'imageAiModel',
+              )}
+              <div>
+                {renderInput(
+                  `imageProviders.${settings.imageProviders.provider}`,
+                  'apiKey',
+                  'API Key',
+                  'password',
+                  '••••••••',
+                  'imageAiApiKey',
+                )}
+                {(settings.imageProviders.provider === 'openai'
+                  ? settings.imageProviders.openai.apiKey
+                  : settings.imageProviders.gemini.apiKey) === '***' && (
+                  <p className="mt-1 text-xs text-muted-foreground">
+                    저장된 키가 있습니다(변경 시에만 새 키 입력)
+                  </p>
+                )}
+              </div>
+              <p className="md:col-span-2 text-xs text-muted-foreground">
+                OpenAI 선택 시 gpt-image-1로 이미지를 생성합니다(API Key 필수). OpenAI를 사용 안
+                함으로 하거나 키가 없으면 기존 Gemini 이미지 생성으로 폴백합니다. Gemini 선택 시
+                사용 안 함이면 이미지 생성을 하지 않습니다. Gemini 공급자의 API Key/모델도 이 탭에서
+                설정합니다.
+              </p>
+            </CardContent>
+          </Card>
+          <Button
+            onClick={() => handleSave('imageProviders')}
+            disabled={saving === 'imageProviders'}
+          >
+            {saving === 'imageProviders' ? (
+              <RefreshCw className="h-4 w-4 animate-spin mr-2" />
+            ) : (
+              <Save className="h-4 w-4 mr-2" />
+            )}
+            저장
+          </Button>
         </TabsContent>
 
         <TabsContent value="notifications" className="mt-4 space-y-4">

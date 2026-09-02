@@ -1,7 +1,13 @@
 import { getLogger } from '@core/logger';
 import { PostContent, PostStatus, AffiliateProduct, TemplateRenderResult } from '@core/interfaces';
 import { createTemplateEngine, TemplateEngineImpl } from './TemplateEngine';
-import { createImageGenerator } from './ImageGenerator';
+import {
+  resolveImageGenerator,
+  generateImagesSafely,
+  resolveGeminiImageConfig,
+  interleaveImageSpecs,
+} from './ImageGenerator';
+import { buildProductImagePrompts, buildSectionImageSpecs } from './imagePrompts';
 import { createPostAssembler } from './PostAssembler';
 import { createContentGeneratorFromConfig } from './ContentGenerator';
 import { fetchTopPosts, fetchKeywordInsight } from './InsightFetch';
@@ -171,8 +177,18 @@ function stubProductFor(keyword: string): AffiliateProduct {
 export async function generateDraftFromKeyword(input: {
   keyword: string;
   templateName: string;
+  /**
+   * 기존 드래프트(비동기 생성 플레이스홀더)를 같은 id로 교체 저장할 때 사용.
+   * 미지정 시 기존처럼 새 id를 생성한다.
+   */
+  postId?: string;
+  /**
+   * 저장 직전 취소 확인 — true면 파일을 쓰지 않고 중단한다(DELETE 취소 계약).
+   * 이 경우 드래프트는 저장되지 않고 상태 기록도 없다.
+   */
+  isCancelled?: () => boolean;
 }): Promise<PostContent> {
-  const { keyword, templateName } = input;
+  const { keyword, templateName, postId } = input;
   const templateEngine = getTemplateEngine();
   await templateEngine.loadTemplates();
 
@@ -185,7 +201,12 @@ export async function generateDraftFromKeyword(input: {
   const topPosts = await fetchTopPosts(keyword, 10);
   const generator = createContentGeneratorFromConfig();
   const defaults = defaultFieldValues(keyword);
-  let generated = await generator.generateTemplateData({ keyword, topPosts, fields });
+  // LLM 초안 생성과 키워드 인사이트 조회는 서로 독립 — 병렬로 가져와 총 응답 시간을 단축한다.
+  const [generatedRaw, keywordInsight] = await Promise.all([
+    generator.generateTemplateData({ keyword, topPosts, fields, templateName }),
+    fetchKeywordInsight(keyword),
+  ]);
+  let generated = generatedRaw;
   if (generated === null) {
     generated = { ...defaults };
   }
@@ -196,7 +217,6 @@ export async function generateDraftFromKeyword(input: {
     }
   }
 
-  const keywordInsight = await fetchKeywordInsight(keyword);
   const templateData: Record<string, unknown> = {
     ...generated,
     productName: keyword,
@@ -209,6 +229,29 @@ export async function generateDraftFromKeyword(input: {
     affiliateUrl: '#',
     topPosts,
   };
+  // R5 이미지 생성: 이미지 프로바이더(openai→gemini)가 설정된 경우에만 상품+섹션 프롬프트로 생성한다.
+  // 미설정/실패 시 images 없이 진행(경고 로그) — placeholder 네트워크 호출·글 발행 지연 없음.
+  // 스펙은 상품/섹션 교차 배치(#8) — generateImagesSafely의 maxImagesPerPost 상한이
+  // 잘리더라도 상품 컷과 섹션 컷이 균형 있게 남도록 한다.
+  const imageGenerator = resolveImageGenerator('./output/images');
+  const images = resolveGeminiImageConfig()
+    ? await generateImagesSafely(
+        imageGenerator,
+        interleaveImageSpecs(
+          buildProductImagePrompts({ productName: keyword, categoryName: keyword }).map(
+            (prompt) => ({ prompt }),
+          ),
+          buildSectionImageSpecs({ productName: keyword, categoryName: keyword })
+            .slice(0, 3)
+            .map((spec) => ({ key: spec.key, prompt: spec.prompt })),
+        ),
+      )
+    : { urls: [], localPaths: [], sectionImages: {} };
+  templateData.sectionImages = images.sectionImages;
+  if (images.localPaths.length > 0) {
+    templateData.imageUrl = images.localPaths[0];
+  }
+
   if (keywordInsight) {
     templateData.keywordInsight = keywordInsight;
   }
@@ -218,7 +261,6 @@ export async function generateDraftFromKeyword(input: {
     templateData,
   );
 
-  const imageGenerator = createImageGenerator('placeholder', './output/images');
   const postAssembler = createPostAssembler(templateEngine, imageGenerator);
   const platformContent = postAssembler.generatePlatformContent(
     renderResult,
@@ -228,7 +270,7 @@ export async function generateDraftFromKeyword(input: {
 
   const now = new Date().toISOString();
   const post: PostContent = {
-    id: `post-${Date.now()}-${Math.random().toString(36).substring(7)}`,
+    id: postId ?? `post-${Date.now()}-${Math.random().toString(36).substring(7)}`,
     template: templateName,
     productId: `keyword:${keyword}`,
     platform: 'unknown',
@@ -240,10 +282,19 @@ export async function generateDraftFromKeyword(input: {
     categories: renderResult.categories,
     platformContent,
     affiliateUrl: '',
-    images: [],
+    images: images.localPaths,
     createdAt: now,
     updatedAt: now,
   };
+
+  // DELETE 등으로 취소된 생성은 파일을 쓰지 않고 중단한다(좀비 부활 방지, 상태 기록 없음).
+  if (input.isCancelled?.()) {
+    logger.info(
+      { postId: post.id, keyword, template: templateName },
+      'Keyword draft generation cancelled before save',
+    );
+    return post;
+  }
 
   savePostFiles(post);
   logger.info({ postId: post.id, keyword, template: templateName }, 'Draft generated from keyword');

@@ -25,8 +25,19 @@ keywordProviders:
     apiKey: 'e2e-key-id'
     apiSecret: 'e2e-key-secret'
     baseUrl: 'http://127.0.0.1:4600'
+    searchTrend: true
+    shoppingInsight: true
+    searchTrendBaseUrl: 'http://127.0.0.1:4600/search-trend/v1'
+    shoppingBaseUrl: 'http://127.0.0.1:4600/shopping/v1'
 keywords:
-  topSeeds: ['무선청소기']
+  trendAnchor: '쇼핑'
+  # 데이터랩 인기검색어 랭킹 — e2e에서는 mock 서버로 교체(이슈 #14)
+  datalabApi:
+    baseUrl: 'http://127.0.0.1:4600'
+  shoppingSignals: ['추천', '가격', '최저가', '리뷰']
+  shoppingCategoryPool:
+    - { name: 'mock-category-a', category: '10000001' }
+    - { name: 'mock-category-b', category: '10000002' }
 scheduler:
   enabled: false
   timezone: 'Asia/Seoul'

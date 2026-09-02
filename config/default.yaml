@@ -74,6 +74,26 @@ imageProviders:
     defaultQuality: 'hd'
     defaultSize: '1024x1024'
 
+  openai:
+    enabled: true
+    apiKey: '' # Set via environment variable BLOG_POSTER_IMAGE_PROVIDERS_OPENAI_API_KEY
+    model: 'gpt-image-1'
+    # gpt-image-1 단가(USD/장, 근사치) — ImageGenerator.ts OPENAI_IMAGE_UNIT_COST_USD 참고:
+    #   1024x1024: low $0.011 / medium $0.063 / high $0.17
+    #   1024x1536·1536x1024: low $0.016 / medium $0.119 / high $0.25
+    # 지원 사이즈는 1024x1024(최소) / 1024x1536 / 1536x1024 / auto
+    size: '1024x1024'
+    quality: 'low'
+
+  # 비용 통제 (#8): 크레딧 소진 방지 게이트
+  #   maxImagesPerPost         — 포스트당 생성 상한 (generateImagesSafely에서 스펙 절단)
+  #   budget.dailyImageLimit   — 하루 최대 생성 장수 (0 = 무제한). 사용 대장: output/images/.image-usage.json
+  #   budget.dailyCostLimitUsd — 하루 누적 예상 비용 한도(USD, 0 = 미사용)
+  maxImagesPerPost: 3
+  budget:
+    dailyImageLimit: 20
+    dailyCostLimitUsd: 0
+
   stable-diffusion:
     enabled: false
     apiUrl: 'https://api.stability.ai'
@@ -100,9 +120,30 @@ keywordProviders:
   coupang:
     enabled: true
 
-# Top-20 keyword feed (query-less) — seed keywords aggregated via Naver API Hub
+  naver-api-hub:
+    # SCH_TRND(검색어트렌드) / SHPP_INST(쇼핑인사이트) — 키는 secrets.yaml에서 병합
+    searchTrend: true
+    shoppingInsight: true
+# Top-20 keyword feed (query-less) — 검색어 트렌드(SCH_TRND) 기반 via Naver API Hub
 keywords:
-  topSeeds: ['무선청소기', '로봇청소기', '공기청정기', '가습기']
+  # (구 keywords.topSeeds 설정 seed 제거 — 기본 TOP 20 피드는 trendAnchor 기준점으로
+  #  검색어 트렌드(SCH_TRND) 기반 조회한다)
+  # SCH_TRND anchor 키워드 — 모든 조회에 공통 포함되어 볼륨 스코어 기준점이 됨
+  trendAnchor: '쇼핑'
+  # 쇼핑 관련 키워드 판별 패턴 (SHPP_INST probe 대상 선별)
+  shoppingSignals: ['추천', '가격', '최저가', '리뷰', '랭킹', '비교', '순위', '가성비']
+  # SHPP_INST probe 후보 카테고리 (cat_id = 네이버쇼핑 URL cat_id). 비어 있으면 probe 생략
+  shoppingCategoryPool: []
+  # 쇼핑 카테고리 코드표 갱신(#키워드 리서치) — 데이터랩을 실조회해 1~4분류 트리를
+  # 재수집한다. 저장: SQLite(data/blog-auto-poster.db) + 커밋용 JSON 동시 갱신.
+  categoryRefreshCron: '0 0 4 1 * *' # 매월 1일 04:00 (node-cron 6필드)
+  categoryRefreshEnabled: true # false = 월간 자동 갱신 비활성화
+  # 데이터랩 분야 인기검색어 랭킹 조회(이슈 #14 A안) — 공식 쇼핑인사이트 API에는
+  # 랭킹 엔드포인트가 없어 웹 UI의 내부 XHR API를 직조회한다(로그인 불필요).
+  # e2e 등에서는 이 baseUrl을 모의서버로 교체한다.
+  datalabApi:
+    baseUrl: 'https://datalab.naver.com'
+
 # Scheduler configuration
 scheduler:
   enabled: false

@@ -51,7 +51,7 @@
 | **블로그 플랫폼** | 티스토리                | Username/Password + API Key (세션 기반)        | 포스트 작성/수정, 카테고리, 멀티파트 이미지 업로드 |
 |                   | 워드프레스              | Application Password / JWT                     | REST API CRUD, 미디어 업로드, 택소노미 동기화      |
 |                   | 유튜브 쇼츠             | OAuth 2.0 (`youtube.upload` scope)             | 재개 가능 업로드, 썸네일, 해시태그 추출            |
-| **키워드 리서치** | 네이버 API Hub          | X-NCP-APIGW-API-KEY-ID/KEY                     | 블로그 검색, 경쟁도 계산, 연관 키워드 추출         |
+| **키워드 리서치** | 네이버 API Hub          | X-NCP-APIGW-API-KEY-ID/KEY                     | 검색어트렌드(SCH_TRND) 볼륨/트렌드, 쇼핑인사이트(SHPP_INST) 클릭 추이, 블로그 검색(NAVER_SCH_BLOG) 경쟁도/연관키워드 |
 |                   | 네이버 DataLab (legacy) | X-Naver-Client-Id/Secret                       | 검색 트렌드                                        |
 |                   | Google Trends           | SerpAPI Key (선택)                             | 글로벌 트렌드                                      |
 |                   | 쿠팡 자동완성           | Coupang Adapter                                | 상품 연관 키워드                                   |
@@ -63,7 +63,7 @@
 ## 자동화 파이프라인
 
 ```
-매일 06:00  →  키워드 리서치 (API Hub 블로그 검색 → 경쟁도/볼륨/트렌드 산출)
+매일 06:00  →  키워드 리서치 (API Hub: SCH_TRND 볼륨/트렌드 + SHPP_INST 쇼핑 클릭 + 블로그 검색 경쟁도/연관키워드)
 매일 07:00  →  콘텐츠 생성 (파트너스 템플릿 렌더링 + AI 이미지 + SEO/JSON-LD)
 매일 08:00  →  멀티 플랫폼 발행 (티스토리/워드프레스/유튜브 쇼츠)
 매시간      →  분석 동기화 (조회수, 클릭, 수익, 전환율)

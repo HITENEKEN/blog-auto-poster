@@ -165,6 +165,13 @@ jsonLd:
     {{/if}}
   </section>
 
+  {{#if sectionImages.usage}}
+  <figure class="section-image">
+    <img src="{{sectionImages.usage}}" alt="직접 사용해 본 모습" loading="lazy" />
+    <figcaption>직접 사용해 본 모습</figcaption>
+  </figure>
+  {{/if}}
+
   <!-- Keyword insight: SCH_TRND trend + SHPP_INST shopping clicks (optional) -->
   {{#if keywordInsight}}
   <section class="keyword-insight">
@@ -200,6 +207,13 @@ jsonLd:
       {{/each}}
     </ul>
   </section>
+
+  {{#if sectionImages.tips}}
+  <figure class="section-image">
+    <img src="{{sectionImages.tips}}" alt="실전 활용 팁" loading="lazy" />
+    <figcaption>실전 활용 팁</figcaption>
+  </figure>
+  {{/if}}
   {{/if}}
   {{#if buyingChecklist}}
   <section class="checklist-section">
@@ -210,6 +224,13 @@ jsonLd:
       {{/each}}
     </ul>
   </section>
+
+  {{#if sectionImages.checklist}}
+  <figure class="section-image">
+    <img src="{{sectionImages.checklist}}" alt="구매 전 체크리스트" loading="lazy" />
+    <figcaption>구매 전 체크리스트</figcaption>
+  </figure>
+  {{/if}}
   {{/if}}
 
   <!-- Purchase Guide -->
@@ -246,12 +267,14 @@ jsonLd:
 <style>
 .coupang-product-review {
   font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
-  line-height: 1.7;
+  font-size: 1.05rem;
+  line-height: 2.0;
   color: #333;
   max-width: 800px;
   margin: 0 auto;
   padding: 20px;
 }
+.coupang-product-review section > p { margin: 0 0 18px; }
 .product-header {
   display: flex;
   gap: 24px;
@@ -290,49 +313,50 @@ jsonLd:
 }
 .cta-button:hover { background: #c62828; }
 .experience-intro {
-  margin: 24px 0;
-  padding: 18px 20px;
+  margin: 28px 0;
+  padding: 20px 24px;
   background: #f3f8ff;
-  border-left: 4px solid #1e88e5;
-  border-radius: 6px;
-  font-size: 1.02rem;
+  border-left: 5px solid #1e88e5;
+  border-radius: 0 8px 8px 0;
+  font-size: 1.05rem;
   color: #1a3a5c;
 }
 .quick-summary { margin: 32px 0; padding: 20px; background: #fafafa; border-radius: 8px; }
 .summary-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 24px; }
-.summary-item h3 { font-size: 1.1rem; margin: 0 0 12px; }
+.summary-item h3 { font-size: 1.15rem; margin: 0 0 14px; }
 .summary-item.pros h3 { color: #2e7d32; }
 .summary-item.cons h3 { color: #c62828; }
 .summary-item ul { margin: 0; padding-left: 20px; }
-.summary-item li { margin: 8px 0; }
+.summary-item li { margin: 10px 0; }
 .detailed-review { margin: 32px 0; }
-.detailed-review h2 { font-size: 1.5rem; margin-bottom: 16px; padding-bottom: 8px; border-bottom: 2px solid #e53935; }
-.detailed-review h3 { font-size: 1.2rem; color: #333; margin-top: 24px; }
+.detailed-review h2 { font-size: 1.55rem; margin-bottom: 20px; padding-bottom: 10px; border-bottom: 2px solid #e53935; }
+.detailed-review h3 { font-size: 1.25rem; color: #333; margin: 28px 0 12px; }
 .real-usage { margin: 16px 0; padding: 16px; background: #fffef5; border: 1px solid #fff3c4; border-radius: 8px; }
 .real-usage p { margin: 0; white-space: pre-line; }
 .description p { color: #555; }
-.specs table { width: 100%; border-collapse: collapse; margin: 12px 0; }
-.specs th, .specs td { padding: 10px 12px; border: 1px solid #ddd; text-align: left; }
+.specs table { width: 100%; border-collapse: collapse; margin: 16px 0; }
+.specs th, .specs td { padding: 12px 14px; border: 1px solid #ddd; text-align: left; }
 .specs th { background: #f5f5f5; font-weight: 600; }
+.specs tr:nth-child(even) td { background: #fafafa; }
 .why-chose { margin-top: 20px; padding: 14px 16px; background: #f1f8e9; border-radius: 8px; }
 .why-chose p { margin: 0; white-space: pre-line; }
 .benchmarks { margin: 32px 0; padding: 20px; background: #f7f7fb; border: 1px solid #e0e0ef; border-radius: 8px; }
-.benchmarks h2 { font-size: 1.3rem; margin: 0 0 12px; color: #4527a0; }
+.benchmarks h2 { font-size: 1.4rem; margin: 0 0 14px; color: #4527a0; }
 .benchmarks ul { margin: 0 0 12px; padding-left: 20px; }
-.benchmarks li { margin: 6px 0; }
+.benchmarks li { margin: 8px 0; }
 .benchmarks a { color: #4527a0; text-decoration: none; }
 .benchmarks a:hover { text-decoration: underline; }
 .purchase-guide { margin: 32px 0; padding: 24px; background: #fff8f8; border-radius: 8px; border: 1px solid #ffebee; }
-.purchase-guide h2 { font-size: 1.4rem; margin: 0 0 16px; color: #c62828; }
+.purchase-guide h2 { font-size: 1.45rem; margin: 0 0 18px; color: #c62828; }
 .conclusion { margin: 14px 0; padding: 14px 16px; background: #e8f5e9; border-radius: 8px; }
 .tips-section { margin: 32px 0; padding: 20px; background: #fffde7; border-radius: 8px; }
-.tips-section h2 { font-size: 1.3rem; margin: 0 0 12px; color: #f57f17; }
+.tips-section h2 { font-size: 1.4rem; margin: 0 0 14px; color: #f57f17; }
 .tips-section ul { margin: 0; padding-left: 20px; }
-.tips-section li { margin: 8px 0; }
+.tips-section li { margin: 10px 0; }
 .checklist-section { margin: 32px 0; padding: 20px; background: #e8f5e9; border-radius: 8px; }
-.checklist-section h2 { font-size: 1.3rem; margin: 0 0 12px; color: #2e7d32; }
+.checklist-section h2 { font-size: 1.4rem; margin: 0 0 14px; color: #2e7d32; }
 .checklist-section ul { margin: 0; padding-left: 20px; list-style: none; }
-.checklist-section li { margin: 8px 0; }
+.checklist-section li { margin: 10px 0; }
 .checklist-section li::before { content: "☐ "; }
 .conclusion p { margin: 0; white-space: pre-line; }
 .purchase-button {
@@ -350,8 +374,31 @@ jsonLd:
 .purchase-button:hover { background: #1b5e20; }
 .disclaimer { margin-top: 16px; color: #888; font-size: 0.85rem; }
 .related-products { margin-top: 40px; padding-top: 24px; border-top: 1px solid #eee; color: #888; }
+/* 본문 섹션 이미지 (R5) */
+.section-image { margin: 28px 0; }
+.section-image img {
+  display: block;
+  max-width: 100%;
+  border-radius: 10px;
+  box-shadow: 0 4px 14px rgba(0,0,0,0.12);
+  margin: 0 auto;
+}
+.section-image figcaption {
+  margin-top: 10px;
+  font-size: 0.9rem;
+  color: #868e96;
+  text-align: center;
+}
 @media (max-width: 600px) {
   .product-header { flex-direction: column; }
   .summary-grid { grid-template-columns: 1fr; }
 }
+
+/* ── 스타일 고도화(공통, 이슈 #10): 더 화려한 발행물 ── */
+.coupang-product-review{background:#fff;border:1px solid #f1f3f5;border-radius:16px;padding:20px;box-shadow:0 2px 12px rgba(0,0,0,.05)}
+.coupang-product-review h2{background:linear-gradient(90deg,#fff3bf,#ffe8cc);padding:8px 12px;border-radius:0 8px 8px 0}
+.coupang-product-review strong{background:linear-gradient(180deg,transparent 62%,#ffec99 62%)}
+.cta-button{background:linear-gradient(135deg,#e64980,#f76707)!important;box-shadow:0 4px 12px rgba(230,73,128,.35);letter-spacing:-.02em}
+.purchase-button{background:linear-gradient(135deg,#e8590c,#f76707)!important;box-shadow:0 4px 12px rgba(232,89,12,.35)}
+.purchase-cta{box-shadow:0 6px 18px rgba(232,89,12,.18)}
 </style>

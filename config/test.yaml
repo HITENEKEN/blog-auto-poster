@@ -42,10 +42,15 @@ imageProviders:
     enabled: false
   gemini:
     enabled: false
+  openai:
+    enabled: false
 
 keywordProviders:
   naver:
     enabled: false
+  naver-api-hub:
+    searchTrend: false
+    shoppingInsight: false
   google-trends:
     enabled: true
     useSerpApi: false

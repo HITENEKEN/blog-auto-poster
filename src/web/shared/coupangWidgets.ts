@@ -9,4 +9,5 @@ export const COUPANG_WIDGET_LABELS: Record<CoupangWidgetKind, string> = {
   'dynamic-banner': '다이나믹 배너',
   'search-widget': '검색 위젯',
   'category-banner': '카테고리 배너',
+  'ad-banner': '광고 배너',
 };

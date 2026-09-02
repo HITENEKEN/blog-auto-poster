@@ -1,13 +1,15 @@
+import { createHash } from 'crypto';
 import * as fs from 'fs';
 import * as path from 'path';
 import { getLogger } from './logger';
 
 const logger = getLogger('cache');
-
 export interface CacheEntry<T> {
   value: T;
   expiresAt: number;
   createdAt: number;
+  /** 원본 캐시 키 — 파일명이 절단·해시될 때 디스크 복원용 (writeToDisk가 기록). */
+  k?: string;
 }
 
 export interface CacheOptions {
@@ -47,9 +49,8 @@ export class FileCache<T = unknown> {
         const filePath = path.join(this.cacheDir, file);
         const content = fs.readFileSync(filePath, 'utf-8');
         const entry = JSON.parse(content) as CacheEntry<T>;
-
+        const key = typeof entry.k === 'string' && entry.k ? entry.k : file.slice(0, -5);
         if (entry.expiresAt > Date.now()) {
-          const key = file.slice(0, -5);
           this.memoryCache.set(key, entry);
         } else {
           fs.unlinkSync(filePath);
@@ -98,16 +99,21 @@ export class FileCache<T = unknown> {
       logger.debug({ cleaned, remaining: this.memoryCache.size }, 'Cache cleanup completed');
     }
   }
-
   private getFilePath(key: string): string {
-    const safeKey = key.replace(/[^a-zA-Z0-9_-]/g, '_');
+    let safeKey = key.replace(/[^a-zA-Z0-9_-]/g, '_');
+    // 파일명 255바이트 제한 — 긴 키(JSON 요청 본문 등)는 절단 후 원키 해시로
+    // 구분한다. 짧은 키는 기존 그대로 유지해 디스크 호환을 깨지 않는다.
+    if (safeKey.length > 160) {
+      const digest = createHash('sha256').update(key).digest('hex').slice(0, 32);
+      safeKey = `${safeKey.slice(0, 120)}_${digest}`;
+    }
     return path.join(this.cacheDir, `${safeKey}.json`);
   }
 
   private writeToDisk(key: string, entry: CacheEntry<T>): void {
     try {
       const filePath = this.getFilePath(key);
-      fs.writeFileSync(filePath, JSON.stringify(entry), 'utf-8');
+      fs.writeFileSync(filePath, JSON.stringify({ ...entry, k: key }), 'utf-8');
     } catch (error) {
       logger.warn({ key, error: String(error) }, 'Failed to write cache to disk');
     }

@@ -44,6 +44,10 @@ export interface TemplateDataRequest {
   topPosts: TopPost[];
   /** 해당 템플릿의 requiredFields + optionalFields */
   fields: string[];
+  /**
+   * 템플릿 이름 — fun/emoji/meme 계열 템플릿이면 이모지·밈 톤 지시가 추가된다.
+   */
+  templateName?: string;
 }
 
 /**
@@ -196,6 +200,31 @@ export function validateFieldValue(name: string, value: unknown): unknown {
       return Object.keys(out).length > 0 ? out : null;
     }
   }
+}
+
+/**
+ * 발행 시점 AI 다듬기 결과 검증(이슈 #12) — 순수 함수, 유닛 테스트 대상.
+ * LLM이 HTML 구조를 훼손했는지 확인한다:
+ *  - 위젯 마커(data-coupang-widget) 개수 보존
+ *  - <img> 개수 보존
+ *  - 원본의 모든 href가 결과에 보존
+ *  - 본문 텍스트 길이가 크게 변하지 않음(50%~150%)
+ * 검증 탈락 시 호출부가 원본 HTML로 발행한다(AI 실패가 발행을 막지 않게 한다).
+ */
+export function validatePolishedHtml(original: string, polished: string): boolean {
+  if (!polished || polished.length < 100) return false;
+  const markerCount = (s: string): number => (s.match(/data-coupang-widget=/g) ?? []).length;
+  if (markerCount(original) !== markerCount(polished)) return false;
+  const imgCount = (s: string): number => (s.match(/<img\b/gi) ?? []).length;
+  if (imgCount(original) !== imgCount(polished)) return false;
+  const hrefs = (s: string): Set<string> =>
+    new Set([...s.matchAll(/href="([^"]+)"/g)].map((m) => m[1]));
+  for (const href of hrefs(original)) {
+    if (!hrefs(polished).has(href)) return false;
+  }
+  const textLen = (s: string): number => s.replace(/<[^>]+>/g, '').replace(/\s+/g, '').length;
+  const ratio = textLen(polished) / Math.max(1, textLen(original));
+  return ratio >= 0.5 && ratio <= 1.5;
 }
 
 /** FIELD_SPECS를 기반으로 요청 필드의 JSON 스키마 설명 라인 생성 */
@@ -395,6 +424,7 @@ export class ContentGenerator {
    * 템플릿 데이터 생성용 규칙을 더해 (system, user) 프롬프트를 만든다.
    */
   buildTemplateDataPrompt(req: TemplateDataRequest): { system: string; user: string } {
+    const isFunTone = /fun|emoji|meme/i.test(req.templateName ?? '');
     const system = [
       '당신은 대한민국 블로그 마케팅 카피라이팅 전문가입니다.',
       '독자에게 신뢰를 주는 "내가 직접 써본 경험" 후기체로 작성하세요.',
@@ -402,6 +432,13 @@ export class ContentGenerator {
       '문장은 길고 구체적이며 정직해야 합니다. 장점뿐 아니라 아쉬웠던 점도 균형 있게 언급하세요.',
       '제공된 상위 블로그 벤치마크(제목/요약)는 "구성 방식과 접근 각도"의 영감으로만 참고하세요. 절대 그대로 베끼거나 표절하지 마세요(SEO 패널티 위험).',
       'AI/기계적 문장과 과장 표현을 쓰지 마세요. 구어체 경어체(~해요, ~더라고요)로 자연스럽게 작성하세요.',
+      '풍부한 문장으로 작성하세요: 구체적 사용 상황·수치·감각 묘사(촉감/소리/냄새 등)를 넣고, 문단은 2~4문장 단위로 \n\n으로 나누어 리듬감을 주세요.',
+      '텍스트 필드는 아래 최소 분량을 반드시 채우세요(미달 시 재작성한 것으로 간주합니다): experienceIntro 300자 이상, realUsageStory 700자 이상, whyIChoseIt 400자 이상, conclusion 400자 이상. 배열 항목은 각 1~2문장으로 구체적으로.',
+      ...(isFunTone
+        ? [
+            '이 템플릿은 이모지·밈 활용형입니다: 문단 곳곳에 자연스러운 이모지(1~2개)를 사용하고, "실화?", "국룰" 같은 가벼운 유행어/밈을 절제해 녹이세요. 남발하면 어색해지므로 전체의 10% 이하로 유지하세요.',
+          ]
+        : []),
       '가격은 참고 시세이며, 실제 가격은 쿠팡에서 확인해야 한다는 안내가 본문에 자연스럽게 포함되도록 작성하세요.',
       '절대 고지문/법적 문구(제휴 고지, 책임 한정 등)를 작성하지 마세요.',
       '요청된 필드만 아래 JSON 스키마 그대로 순수 JSON으로만 출력하세요.',
@@ -414,6 +451,7 @@ export class ContentGenerator {
 
     const user = [
       `키워드: ${req.keyword}`,
+      req.templateName ? `템플릿: ${req.templateName}` : '',
       '',
       '상위 블로그 벤치마크 (참고용, 표절 금지):',
       bench,
@@ -430,8 +468,12 @@ export class ContentGenerator {
     return { system, user };
   }
 
-  /** (system, user) 프롬프트를 설정된 프로바이더로 실행해 원문 텍스트를 반환한다. */
-  private async complete(system: string, user: string): Promise<string> {
+  /**
+   * (system, user) 프롬프트를 설정된 프로바이더로 실행해 원문 텍스트를 반환한다.
+   * jsonMode가 true(기본)면 OpenAI 호환 엔드포인트에 JSON 응답 포맷을 강제한다.
+   * HTML 등 자유 텍스트 출력은 false로 호출한다.
+   */
+  private async complete(system: string, user: string, jsonMode = true): Promise<string> {
     if (this.provider === 'gemini') {
       const genAI = new GoogleGenerativeAI(this.apiKey!);
       const model = genAI.getGenerativeModel({ model: this.model, systemInstruction: system });
@@ -454,9 +496,88 @@ export class ContentGenerator {
         { role: 'system', content: system },
         { role: 'user', content: user },
       ],
-      response_format: { type: 'json_object' },
+      ...(jsonMode ? { response_format: { type: 'json_object' as const } } : {}),
     });
     return completion.choices[0]?.message?.content || '';
+  }
+
+  /**
+   * 현재 블로그 글 HTML과 사용자 요청을 받아 LLM으로 수정된 전체 HTML을 반환한다.
+   * 편집 화면 AI 채팅(POST /api/posts/:id/ai-edit)용 — 파일 저장은 호출부가 담당한다.
+   * API 키가 없거나 LLM 호출에 실패하면 throw한다(라우트가 500 반환).
+   */
+  async editPostHtml(currentHtml: string, userPrompt: string): Promise<string> {
+    if (!this.apiKey) {
+      throw new Error('LLM API 키가 설정되지 않았습니다');
+    }
+
+    const system = [
+      '당신은 대한민국 블로그 글 편집 어시스턴트입니다.',
+      '제공된 HTML 글 전체를 사용자 요청에 맞게 수정합니다.',
+      'HTML 구조(템플릿 스타일/섹션 구분/이미지 태그/쿠팡 위젯 마커 data-coupang-widget)는 반드시 보존하고, 내용(문장)만 수정하세요.',
+      '응답은 설명이나 코드펜스 없이 수정된 전체 HTML만 출력하세요.',
+    ].join('\n');
+
+    const user = [
+      '다음은 현재 블로그 글이다.',
+      '',
+      currentHtml,
+      '',
+      `사용자 요청: ${userPrompt}`,
+      '글 전체를 요청에 맞게 수정해라.',
+      'HTML 구조(템플릿 스타일/섹션/이미지 태그/쿠팡 위젯 마커 data-coupang-widget)는 보존하고 내용만 수정하라.',
+      '응답은 수정된 전체 HTML만.',
+    ].join('\n');
+
+    const text = await this.complete(system, user, false);
+    // 모델이 관례적으로 코드펜스를 붙이는 경우를 대비해 벗겨낸다.
+    return text
+      .trim()
+      .replace(/^```(?:html)?\s*/i, '')
+      .replace(/```\s*$/, '')
+      .trim();
+  }
+
+  /**
+   * 발행 시점 AI 최종 다듬기(이슈 #12). 문장만 다듬고 HTML 구조/링크/이미지는
+   * 절대 변경하지 않도록 지시하며, 결과는 validatePolishedHtml로 검증한다.
+   * API 키가 없거나 LLM 실패/검증 탈락 시 null을 반환해 호출부가 원본으로
+   * 발행하도록 한다(AI 실패가 발행을 막지 않는다).
+   */
+  async polishForPublish(currentHtml: string): Promise<string | null> {
+    if (!this.apiKey) return null;
+    const system = [
+      '당신은 대한민국 블로그 글 최종 교정 어시스턴트입니다.',
+      '제공된 HTML 글을 발행 직전 최종본으로 다듬습니다.',
+      '다듬기 범위: 어색한 문장 수정, 문단 리듬 정리, 도입부 훅 강화, 이모지 과다/부족 균형 맞추기, 중복 표현 제거.',
+      '절대 규칙: HTML 태그 추가/삭제/변경 금지. href/src/class/style/data-* 속성 변경 금지. 링크·이미지·위젯 마커(data-coupang-widget)는 그대로 유지. 섹션 순서 변경 금지.',
+      '텍스트 노드의 문장만 수정하세요. 응답은 설명이나 코드펜스 없이 수정된 전체 HTML만 출력하세요.',
+    ].join('\n');
+    const user = [
+      '다음은 발행 직전 블로그 글 HTML이다.',
+      '',
+      currentHtml,
+      '',
+      '위 글을 발행용 최종본으로 다듬어라. HTML 구조·속성·링크·이미지·마커는 1글자도 바꾸지 마라.',
+      '응답은 수정된 전체 HTML만.',
+    ].join('\n');
+    try {
+      const text = await this.complete(system, user, false);
+      const candidate = text
+        .trim()
+        .replace(/^```(?:html)?\s*/i, '')
+        .replace(/```\s*$/, '')
+        .trim();
+      if (!candidate) return null;
+      if (!validatePolishedHtml(currentHtml, candidate)) {
+        logger.warn('Polished HTML failed validation; falling back to original');
+        return null;
+      }
+      return candidate;
+    } catch (error) {
+      logger.warn({ error: String(error) }, 'Publish-time AI polish failed; using original');
+      return null;
+    }
   }
 
   private parseTemplateData(text: string, fields: string[]): Record<string, unknown> | null {

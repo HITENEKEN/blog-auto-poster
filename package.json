@@ -21,7 +21,11 @@
     "naver:login": "node scripts/naver-login.mjs",
     "smoke": "node -r ./scripts/path-alias.js dist/cli/index.js research 테스트 --limit=3",
     "pretest:e2e": "npm run build && cd src/web/client && npx vite build",
-    "test:e2e": "playwright test"
+    "dev:server": "bash scripts/dev-server.sh",
+    "dev:client": "npm run dev --prefix src/web/client",
+    "dev:web": "bash scripts/dev-web.sh",
+    "test:e2e": "playwright test",
+    "test:e2e:fast": "playwright test"
   },
   "keywords": [
     "blog",

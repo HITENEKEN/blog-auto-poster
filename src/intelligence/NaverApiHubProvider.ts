@@ -1,5 +1,7 @@
+import type { AxiosInstance } from 'axios';
 import { getLogger } from '@core/logger';
 import { getCache } from '@core/cache';
+import { getConfigManager } from '@core/config';
 import { createHttpClient } from '@core/http';
 import {
   KeywordProvider,
@@ -9,6 +11,21 @@ import {
   CompetitorAnalyzer,
   CompetitorPost,
 } from '@core/interfaces';
+
+import {
+  classifyTrend,
+  isShoppingKeyword,
+  monthRange,
+  peakRatio,
+  pickShoppingCategory,
+  scaleVolume,
+  SHOPPING_CATEGORY_POOL_MAX,
+  SHOPPING_KEYWORDS_PER_REQUEST,
+  TREND_GROUPS_PER_REQUEST,
+  DEFAULT_SHOPPING_SIGNALS,
+  type ShoppingCategoryObservation,
+  type TrendSeries,
+} from './TrendAnalysis';
 
 const logger = getLogger('naver-api-hub');
 
@@ -35,6 +52,74 @@ type NaverApiSearchResponse<T = NaverApiBlogItem> = {
   display: number;
   items: T[];
 };
+
+// SCH_TRND (검색어트렌드) / SHPP_INST (쇼핑인사이트) request/response shapes
+type TrendKeywordGroup = { groupName: string; keywords: string[] };
+type TrendApiResponseGroup = { title: string; keywords?: string[]; data: TrendSeries };
+type TrendApiResponse = {
+  startDate: string;
+  endDate: string;
+  timeUnit: string;
+  results: TrendApiResponseGroup[];
+};
+
+/** SCH_TRND/SHPP_INST 조회 옵션 — 미지정/빈 값 필드는 요청 바디에서 생략한다. */
+export type TrendQueryOptions = {
+  months?: number; // startDate/endDate 미지정 시에만 사용, 기본 12
+  startDate?: string; // yyyy-mm-dd, 지정 시 months 무시
+  endDate?: string;
+  timeUnit?: 'date' | 'week' | 'month'; // 기본 'month' (기존 동작 유지)
+  device?: string; // ''/undefined = 미전송
+  gender?: string; // ''/undefined = 미전송
+  ages?: string[]; // 빈 배열/undefined = 미전송
+};
+
+/**
+ * SHPP_INST 조회 기준. 공식 엔드포인트로의 실제 경로 매핑은 SHOPPING_ENDPOINTS가
+ * 담당한다 — criteria 이름 자체는 라우트/클라이언트 계약으로 불변이다.
+ */
+export type ShoppingCriteria =
+  | 'category'
+  | 'keyword'
+  | 'gender'
+  | 'ages'
+  | 'device'
+  | 'keywords'
+  | 'keywords-keyword'
+  | 'keywords-gender'
+  | 'keywords-ages'
+  | 'keywords-device';
+
+/**
+ * criteria → 공식 SHPP_INST 엔드포인트 (NAVER API HUB 문서, 2026-08 기준).
+ * 'keyword'/'keywords-keyword'는 공식 plain keyword-level 엔드포인트가 없어
+ * 가장 근접한 /category/keywords(1쌍)로 대체한다.
+ */
+const SHOPPING_ENDPOINTS: Record<ShoppingCriteria, string> = {
+  category: '/categories',
+  keyword: '/category/keywords',
+  gender: '/category/gender',
+  ages: '/category/age',
+  device: '/category/device',
+  keywords: '/category/keywords',
+  'keywords-keyword': '/category/keywords',
+  'keywords-gender': '/category/keyword/gender',
+  'keywords-ages': '/category/keyword/age',
+  'keywords-device': '/category/keyword/device',
+};
+
+/**
+ * 캐시 키 스코프 — 엔드포인트 baseURL의 호스트. e2e/mock 실행과 실서버가
+ * 같은 .cache 디스크 캐시를 공유하면서 mock 응답(모든 카테고리에 동일 데이터)이
+ * 실API 키로 재사용되던 오염을 키 레벨에서 차단한다.
+ */
+function cacheScope(baseURL: string): string {
+  try {
+    return new URL(baseURL).host;
+  } catch {
+    return 'unknown';
+  }
+}
 
 // ---------------------------------------------------------------------------
 // Related-keyword extraction helpers (deterministic, dependency-free)
@@ -251,19 +336,34 @@ export function sortByPostdateDesc<T extends { postdate?: string }>(items: T[]):
 
 export class NaverApiHubKeywordProvider implements KeywordProvider {
   readonly name = 'naver-api-hub';
-  private client: ReturnType<typeof createHttpClient>;
+  private client: AxiosInstance;
+  private trendClient: AxiosInstance;
+  private shoppingClient: AxiosInstance;
   private cache = getCache<KeywordData[]>('naver-api-hub-keywords');
   private searchCache = getCache<NaverApiSearchResponse>('naver-api-hub-search');
   private newsCache = getCache<NaverApiSearchResponse<NaverApiNewsItem>>('naver-api-hub-news');
+  private trendCache = getCache<TrendApiResponseGroup[]>('naver-api-hub-trend');
+  private shoppingCache = getCache<TrendApiResponseGroup[]>('naver-api-hub-shopping');
+  private baseUrl: string;
+  private trendBaseUrl: string;
+  private shoppingBaseUrl: string;
   private apiKeyId: string;
   private apiKey: string;
+  private searchTrendEnabled: boolean;
+  private shoppingInsightEnabled: boolean;
+  /** 캐시 키 스코프 — 엔드포인트 호스트. mock(e2e) 항목이 실API 항목과 충돌하지
+   * 않게 한다(공유 .cache 디스크 캐시 오염 방지). */
+  private scope: string;
+  private trendScope: string;
+  private shoppingScope: string;
 
   constructor(config: KeywordProviderConfig) {
     this.apiKeyId = config.apiKey || '';
     this.apiKey = config.apiSecret || '';
+    this.searchTrendEnabled = config.searchTrend === true;
+    this.shoppingInsightEnabled = config.shoppingInsight === true;
 
-    this.client = createHttpClient({
-      baseURL: config.baseUrl || 'https://naverapihub.apigw.ntruss.com/search/v1',
+    const commonOptions = {
       timeout: 30000,
       maxRetries: 3,
       defaultHeaders: {
@@ -271,7 +371,25 @@ export class NaverApiHubKeywordProvider implements KeywordProvider {
         'X-NCP-APIGW-API-KEY': this.apiKey,
         'Content-Type': 'application/json',
       },
+    };
+
+    this.client = createHttpClient({
+      ...commonOptions,
+      baseURL: (this.baseUrl = config.baseUrl || 'https://naverapihub.apigw.ntruss.com/search/v1'),
     });
+    this.trendClient = createHttpClient({
+      ...commonOptions,
+      baseURL: (this.trendBaseUrl =
+        config.searchTrendBaseUrl || 'https://naverapihub.apigw.ntruss.com/search-trend/v1'),
+    });
+    this.shoppingClient = createHttpClient({
+      ...commonOptions,
+      baseURL: (this.shoppingBaseUrl =
+        config.shoppingBaseUrl || 'https://naverapihub.apigw.ntruss.com/shopping/v1'),
+    });
+    this.scope = cacheScope(this.baseUrl);
+    this.trendScope = cacheScope(this.trendBaseUrl);
+    this.shoppingScope = cacheScope(this.shoppingBaseUrl);
   }
 
   async research(keywords: string[], options?: KeywordResearchOptions): Promise<KeywordData[]> {
@@ -281,44 +399,268 @@ export class NaverApiHubKeywordProvider implements KeywordProvider {
     }
 
     const results: KeywordData[] = [];
+    const pending: string[] = [];
 
     for (const keyword of keywords) {
-      const cacheKey = `hub-research:${keyword}:${JSON.stringify(options)}`;
+      const cacheKey = `${this.scope}:hub-research-v2:${keyword}:${JSON.stringify(options)}`;
       const cached = this.cache.get(cacheKey) as KeywordData[] | null;
       if (cached) {
         results.push(...cached);
-        continue;
+      } else {
+        pending.push(keyword);
       }
+    }
 
-      try {
-        // 1. Blog search to estimate competition
-        const blogResults = await this.searchBlog(keyword, options?.limit || 20);
-
-        // 2. Get related keywords from blog search results
-        const related = this.extractRelatedKeywords(blogResults, keyword);
-
-        const keywordData: KeywordData = {
-          keyword,
-          volume: this.estimateVolumeFromResults(blogResults),
-          competition: this.calculateCompetition(blogResults),
-          trend: this.calculateTrend(blogResults),
-          related,
-          source: 'naver-api-hub',
-          metadata: {
-            totalResults: blogResults.total,
-            displayCount: blogResults.items?.length || 0,
-            topBlogs: blogResults.items?.slice(0, 5).map((item) => item.bloggername) || [],
-          },
-        };
-
+    if (pending.length > 0) {
+      const fresh = await this.researchBatch(pending, options);
+      for (const keywordData of fresh) {
         results.push(keywordData);
+        const cacheKey = `${this.scope}:hub-research-v2:${keywordData.keyword}:${JSON.stringify(options)}`;
         this.cache.set(cacheKey, [keywordData], 86400); // 24h cache
-      } catch (error) {
-        logger.error({ keyword, error: String(error) }, 'Naver API Hub keyword research failed');
       }
     }
 
     return results;
+  }
+
+  /**
+   * Batch research pipeline:
+   *  1. SCH_TRND — anchor-relative volume score + trend classification
+   *  2. SHPP_INST — shopping-intent keywords probed against the category pool
+   *  3. NAVER_SCH_BLOG — competition + related keywords (blog heuristic fallback
+   *     when trend APIs are disabled or fail)
+   */
+  private async researchBatch(
+    keywords: string[],
+    options?: KeywordResearchOptions,
+  ): Promise<KeywordData[]> {
+    // --- Blog search per keyword (competition + related + fallback heuristics)
+    const blogData = new Map<
+      string,
+      { results: NaverApiSearchResponse; competition: number; related: string[] }
+    >();
+    for (const keyword of keywords) {
+      try {
+        const blogResults = await this.searchBlog(keyword, options?.limit || 20);
+        blogData.set(keyword, {
+          results: blogResults,
+          competition: this.calculateCompetition(blogResults),
+          related: this.extractRelatedKeywords(blogResults, keyword),
+        });
+      } catch (error) {
+        logger.error({ keyword, error: String(error) }, 'API Hub blog search failed');
+      }
+    }
+
+    // --- SCH_TRND: chunked requests with a shared anchor for cross-chunk comparability
+    const trendSeries = new Map<string, TrendSeries>();
+    const volumeScores = new Map<string, number>();
+    if (this.searchTrendEnabled) {
+      try {
+        await this.collectSearchTrends(keywords, trendSeries, volumeScores);
+      } catch (error) {
+        logger.warn({ error: String(error) }, 'SCH_TRND research failed; using blog fallback');
+      }
+    }
+
+    // --- SHPP_INST: probe shopping-intent keywords against the category pool
+    const shoppingPicks = new Map<string, { name: string; category: string; ratio: number }>();
+    if (this.shoppingInsightEnabled) {
+      await this.collectShoppingInsights(keywords, shoppingPicks);
+    }
+
+    const results: KeywordData[] = [];
+    for (const keyword of keywords) {
+      const blog = blogData.get(keyword);
+      if (!blog) continue; // blog search failed — nothing to report
+
+      const series = trendSeries.get(keyword);
+      const shopping = shoppingPicks.get(keyword);
+      const metadata: Record<string, unknown> = {
+        volumeBasis: series ? 'search-trend' : 'blog-estimate',
+        totalResults: blog.results.total,
+        displayCount: blog.results.items?.length || 0,
+        topBlogs: blog.results.items?.slice(0, 5).map((item) => item.bloggername) || [],
+      };
+      if (series) metadata.trendSeries = series;
+      if (shopping) {
+        metadata.shoppingCategory = { name: shopping.name, category: shopping.category };
+        metadata.shoppingRatio = shopping.ratio;
+      }
+
+      results.push({
+        keyword,
+        volume: series
+          ? (volumeScores.get(keyword) ?? 0)
+          : this.estimateVolumeFromResults(blog.results),
+        competition: blog.competition,
+        trend: series ? classifyTrend(series) : this.calculateTrend(blog.results),
+        related: blog.related,
+        source: 'naver-api-hub',
+        metadata,
+      });
+    }
+    return results;
+  }
+
+  /**
+   * SCH_TRND 조회 — 키워드를 청크(앵커 포함 최대 5그룹)로 나눠 조회하고
+   * 앵커 피크 비율 대비 볼륨 스코어를 계산한다.
+   */
+  private async collectSearchTrends(
+    keywords: string[],
+    trendSeries: Map<string, TrendSeries>,
+    volumeScores: Map<string, number>,
+  ): Promise<void> {
+    const anchor = String(getConfigManager().get('keywords.trendAnchor', '쇼핑'));
+    const perChunk = TREND_GROUPS_PER_REQUEST - 1; // anchor takes one slot
+    const chunks: string[][] = [];
+    for (let i = 0; i < keywords.length; i += perChunk) {
+      chunks.push(keywords.slice(i, i + perChunk));
+    }
+
+    // 청크를 병렬 조회한다(이슈 #13 — 순차 호출이 top-20 지연의 주원인).
+    const chunkResults = await Promise.all(
+      chunks.map(async (chunk) => {
+        const groups: TrendKeywordGroup[] = [];
+        if (!chunk.includes(anchor)) {
+          groups.push({ groupName: anchor, keywords: [anchor] });
+        }
+        for (const keyword of chunk) {
+          groups.push({ groupName: keyword, keywords: [keyword] });
+        }
+        try {
+          return { chunk, results: await this.getSearchTrend(groups) };
+        } catch (error) {
+          logger.warn({ error: String(error) }, 'SCH_TRND chunk failed');
+          return { chunk, results: [] as TrendApiResponseGroup[] };
+        }
+      }),
+    );
+
+    for (const { results } of chunkResults) {
+      const anchorPeak = peakRatio(results.find((g) => g.title === anchor)?.data ?? []);
+      for (const group of results) {
+        trendSeries.set(group.title, group.data ?? []);
+        volumeScores.set(group.title, scaleVolume(peakRatio(group.data ?? []), anchorPeak));
+      }
+    }
+  }
+
+  /**
+   * SHPP_INST 조회 — 쇼핑 관련 키워드만 선별해 후보 카테고리 풀에 probe하고,
+   * 클릭 ratio 최대 카테고리를 채택한다. 실패해도 리서치를 깨지 않는다.
+   */
+  private async collectShoppingInsights(
+    keywords: string[],
+    shoppingPicks: Map<string, { name: string; category: string; ratio: number }>,
+  ): Promise<void> {
+    const cm = getConfigManager();
+    const signals = cm.get(
+      'keywords.shoppingSignals',
+      DEFAULT_SHOPPING_SIGNALS as unknown as string[],
+    ) as string[];
+    const pool = (
+      cm.get('keywords.shoppingCategoryPool', []) as Array<{ name: string; category: string }>
+    ).slice(0, SHOPPING_CATEGORY_POOL_MAX);
+    const targets = keywords.filter((kw) => isShoppingKeyword(kw, signals));
+    if (targets.length === 0 || pool.length === 0) return;
+
+    // observations[keyword] = pool 전체 probe 결과
+    const observations = new Map<string, ShoppingCategoryObservation[]>();
+    for (const cat of pool) {
+      for (let i = 0; i < targets.length; i += SHOPPING_KEYWORDS_PER_REQUEST) {
+        const slice = targets.slice(i, i + SHOPPING_KEYWORDS_PER_REQUEST);
+        try {
+          const results = await this.getShoppingTrend('keywords', {
+            ...monthRange(12),
+            timeUnit: 'month',
+            category: cat.category,
+            keyword: slice.map((kw) => ({ name: kw, param: [kw] })),
+          });
+          for (const group of results) {
+            const list = observations.get(group.title) ?? [];
+            list.push({
+              name: cat.name,
+              category: cat.category,
+              peakRatio: peakRatio(group.data ?? []),
+            });
+            observations.set(group.title, list);
+          }
+        } catch (error) {
+          logger.warn(
+            { category: cat.category, error: String(error) },
+            'SHPP_INST probe failed for category',
+          );
+        }
+      }
+    }
+
+    for (const [keyword, obs] of observations) {
+      const pick = pickShoppingCategory(obs);
+      if (pick) {
+        shoppingPicks.set(keyword, {
+          name: pick.name,
+          category: pick.category,
+          ratio: pick.shoppingRatio,
+        });
+      }
+    }
+  }
+
+  /**
+   * SCH_TRND — POST /search (월간 12개월 기본, opts로 기간/단위/필터 지정 가능)
+   */
+  async getSearchTrend(
+    groups: TrendKeywordGroup[],
+    opts?: TrendQueryOptions,
+  ): Promise<TrendApiResponseGroup[]> {
+    const { startDate, endDate } =
+      opts?.startDate && opts?.endDate
+        ? { startDate: opts.startDate, endDate: opts.endDate }
+        : monthRange(opts?.months ?? 12);
+    const timeUnit = opts?.timeUnit ?? 'month';
+    // ''와 undefined를 같은 미전송 상태로 정규화 — 캐시 키도 동일하게 모인다.
+    const device = opts?.device || '';
+    const gender = opts?.gender || '';
+    const ages = opts?.ages?.length ? opts.ages : [];
+    const cacheKey = `${this.trendScope}:trend:${startDate}:${endDate}:${timeUnit}:${device}:${gender}:${ages.join(
+      ',',
+    )}:${JSON.stringify(groups)}`;
+    const cached = this.trendCache.get(cacheKey);
+    if (cached) return cached;
+
+    const response = await this.trendClient.post<TrendApiResponse>('/search', {
+      startDate,
+      endDate,
+      timeUnit,
+      keywordGroups: groups,
+      ...(device ? { device } : {}),
+      ...(gender ? { gender } : {}),
+      ...(ages.length ? { ages } : {}),
+    });
+    this.trendCache.set(cacheKey, response.data.results ?? [], 86400); // 24h cache
+    return response.data.results ?? [];
+  }
+
+  /**
+   * SHPP_INST 조회 — criteria를 SHOPPING_ENDPOINTS의 공식 경로로 POST한다.
+   * 바디는 호출자가 공식 스펙에 맞춰 구성한다. 캐시 TTL 24h, 키에 criteria 포함.
+   */
+  async getShoppingTrend(
+    criteria: ShoppingCriteria,
+    body: Record<string, unknown>,
+  ): Promise<TrendApiResponseGroup[]> {
+    const cacheKey = `${this.shoppingScope}:shopping:${criteria}:${JSON.stringify(body)}`;
+    const cached = this.shoppingCache.get(cacheKey);
+    if (cached) return cached;
+
+    const response = await this.shoppingClient.post<TrendApiResponse>(
+      SHOPPING_ENDPOINTS[criteria],
+      body,
+    );
+    this.shoppingCache.set(cacheKey, response.data.results ?? [], 86400); // 24h cache
+    return response.data.results ?? [];
   }
 
   /**
@@ -329,7 +671,7 @@ export class NaverApiHubKeywordProvider implements KeywordProvider {
     limit: number = 20,
     sort: string = 'sim',
   ): Promise<NaverApiSearchResponse> {
-    const cacheKey = `blog:${keyword}:${limit}:${sort}`;
+    const cacheKey = `${this.scope}:blog:${keyword}:${limit}:${sort}`;
     const cached = this.searchCache.get(cacheKey);
     if (cached) return cached;
 
@@ -358,7 +700,7 @@ export class NaverApiHubKeywordProvider implements KeywordProvider {
     keyword: string,
     limit: number = 10,
   ): Promise<NaverApiSearchResponse<NaverApiNewsItem>> {
-    const cacheKey = `news:${keyword}:${limit}`;
+    const cacheKey = `${this.scope}:news:${keyword}:${limit}`;
     const cached = this.newsCache.get(cacheKey);
     if (cached) return cached;
 
@@ -386,6 +728,7 @@ export class NaverApiHubKeywordProvider implements KeywordProvider {
   private extractRelatedKeywords(
     blogResults: NaverApiSearchResponse,
     seedKeyword: string,
+    minCount: number = 2,
   ): string[] {
     const seedLower = seedKeyword.toLowerCase();
     const counts = new Map<string, { count: number; word: string }>();
@@ -407,9 +750,9 @@ export class NaverApiHubKeywordProvider implements KeywordProvider {
     }
 
     return Array.from(counts.entries())
-      .filter(([, entry]) => entry.count >= 2)
+      .filter(([, entry]) => entry.count >= minCount)
       .sort((a, b) => b[1].count - a[1].count)
-      .slice(0, 15)
+      .slice(0, 30)
       .map(([, entry]) => entry.word);
   }
 
@@ -506,13 +849,15 @@ export class NaverApiHubBlogAnalyzer implements CompetitorAnalyzer {
   readonly name = 'naver-blog-hub';
   private client: ReturnType<typeof createHttpClient>;
   private cache = getCache<CompetitorPost[]>('naver-api-hub-blog-analysis');
+  /** 캐시 키 스코프 — 엔드포인트 호스트(mock/실API 캐시 오염 방지). */
+  private scope: string;
   private apiKeyId: string;
   private apiKey: string;
 
   constructor(config: { apiKey: string; apiSecret: string; baseUrl?: string }) {
     this.apiKeyId = config.apiKey;
     this.apiKey = config.apiSecret;
-
+    this.scope = cacheScope(config.baseUrl || 'https://naverapihub.apigw.ntruss.com/search/v1');
     this.client = createHttpClient({
       baseURL: config.baseUrl || 'https://naverapihub.apigw.ntruss.com/search/v1',
       timeout: 30000,
@@ -530,8 +875,7 @@ export class NaverApiHubBlogAnalyzer implements CompetitorAnalyzer {
     limit: number = 10,
   ): Promise<CompetitorPost[]> {
     if (!platforms.includes('naver-blog-hub')) return [];
-
-    const cacheKey = `analyze:${keyword}:${limit}`;
+    const cacheKey = `${this.scope}:analyze:${keyword}:${limit}`;
     const cached = this.cache.get(cacheKey) as CompetitorPost[] | null;
     if (cached) return cached;
 

@@ -46,8 +46,17 @@ npm run build
 # 5. 실행
 npm run cli -- config                    # 설정 위자드
 npm run cli -- research "무선청소기"     # 키워드 리서치
-npm run web:dev                          # 대시보드 (http://localhost:5173)
+npm run dev:web                          # 대시보드 (http://localhost:5173)
 ```
+
+---
+
+## 🛠️ 개발 워크플로
+
+- `npm run dev:web` — 서버(tsc watch + 변경 시 자동 재시작, 포트 3005)와 클라이언트(vite dev, http://localhost:5173)를 동시에 띄웁니다. 소스 수정이 즉시 반영되며 `/api`, `/ws`는 vite 프록시로 dev 서버에 전달됩니다(PM2 운영 서버의 3002와 충돌하지 않습니다).
+- `npm run dev:server` / `npm run dev:client` — 서버/클라이언트 각각 따로 띄울 때 사용합니다.
+- `npm run test:e2e:fast` — 빌드를 건너뛰고 기존 `dist/`, `src/web/client/dist`를 재사용해 e2e만 실행합니다(빌드 포함 전체 경로는 `npm run test:e2e`).
+- 전체 e2e는 사용자가 요청했을 때만 실행하고, 평소에는 위 dev 모드와 `npm run typecheck`, `npm test`(vitest)로 빠르게 검증합니다.
 
 ---
 
@@ -96,8 +105,8 @@ npm run cli -- schedule list|enable|disable 잡명
 npm run cli -- analytics --days=30
 
 # 웹 대시보드
-npm run web:dev          # 개발 서버 (프론트: 5173, 백엔드: 3000)
-npm run build:web        # 프론트엔드 프로덕션 빌드
+npm run dev:web          # 개발 서버 (프론트: 5173, 백엔드: 3005)
+npm run build --prefix src/web/client  # 프론트엔드 프로덕션 빌드
 
 # 프로덕션 실행 (PM2)
 pm2 start dist/cli/index.js --name "blog-poster-scheduler" -- schedule
@@ -125,6 +134,31 @@ BLOG_POSTER_PLATFORMS_TISTORY_PASSWORD=xxx
 BLOG_POSTER_PLATFORMS_TISTORY_API_KEY=xxx
 BLOG_POSTER_WEB_JWT_SECRET=your-secret-key
 ```
+
+### 이미지 생성 비용 통제 (#8)
+
+gpt-image-1 단가(USD/장, 근사치):
+
+| 사이즈 | low | medium | high |
+| --- | --- | --- | --- |
+| 1024x1024 | $0.011 | $0.063 | $0.17 |
+| 1024x1536 / 1536x1024 | $0.016 | $0.119 | $0.25 |
+
+`config/*.yaml`의 `imageProviders` 아래에서 제어:
+
+```yaml
+imageProviders:
+  openai:
+    quality: 'low'        # 코드 기본값도 low (high는 장당 ~$0.17로 크레딧 소진이 빠름)
+    size: '1024x1024'     # gpt-image-1 최소 사이즈
+  maxImagesPerPost: 3     # 포스트당 생성 상한
+  budget:
+    dailyImageLimit: 20   # 하루 최대 생성 장수 (0 = 무제한)
+    dailyCostLimitUsd: 0  # 하루 누적 예상 비용 한도 (0 = 미사용)
+```
+
+- 동일 프롬프트 재실행 시 캐시(`output/images/cache/`)를 재사용해 재과금되지 않습니다.
+- 일일 사용량 대장: `output/images/.image-usage.json` — 생성 성공 시 장수·예상 비용이 기록되고, 한도 초과 시 생성을 건너뜁니다(글 발행은 계속 진행).
 
 ---
 

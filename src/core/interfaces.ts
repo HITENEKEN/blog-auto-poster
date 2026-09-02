@@ -239,6 +239,8 @@ export interface ImageGenerationResult {
   urls: string[];
   localPaths: string[];
   provider?: string;
+  /** 섹션키 → 대표 이미지 경로/URL (템플릿 sectionImages 슬롯 주입용, 옵션) */
+  sectionImages?: Record<string, string>;
 }
 
 export interface ImageProvider {
@@ -276,6 +278,12 @@ export interface KeywordResearchOptions {
   language?: string;
   country?: string;
   period?: string;
+  startDate?: string; // yyyy-mm-dd
+  endDate?: string;
+  timeUnit?: 'date' | 'week' | 'month';
+  device?: '' | 'pc' | 'mo'; // '' = 전체
+  gender?: '' | 'm' | 'f'; // '' = 전체
+  ages?: string[]; // 네이버 코드 '1'..'11', 빈 배열/미지정 = 전체
 }
 export interface CompetitorPost {
   platform: string;
@@ -488,6 +496,14 @@ export interface KeywordProviderConfig {
   enabled?: boolean;
   useSerpApi?: boolean;
   useApiHub?: boolean;
+  /** SCH_TRND 검색어트렌드 조회 사용 (NAVER API Hub) */
+  searchTrend?: boolean;
+  /** SHPP_INST 쇼핑인사이트 조회 사용 (NAVER API Hub) */
+  shoppingInsight?: boolean;
+  /** SCH_TRND baseURL 오버라이드 (e2e mock 등) */
+  searchTrendBaseUrl?: string;
+  /** SHPP_INST baseURL 오버라이드 (e2e mock 등) */
+  shoppingBaseUrl?: string;
   extra?: Record<string, unknown>;
 }
 

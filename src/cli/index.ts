@@ -3,7 +3,13 @@ import { Console } from 'node:console';
 import { getConfigManager, getLogger } from '../core';
 import { getAffiliateRegistry } from '../affiliates';
 import { createTemplateEngine } from '../content/TemplateEngine';
-import { createImageGenerator } from '../content/ImageGenerator';
+import {
+  resolveImageGenerator,
+  generateImagesSafely,
+  resolveGeminiImageConfig,
+  interleaveImageSpecs,
+} from '../content/ImageGenerator';
+import { buildProductImagePrompts, buildSectionImageSpecs } from '../content/imagePrompts';
 import { createPostAssembler } from '../content/PostAssembler';
 import { createJobQueue } from '../scheduler/JobQueue';
 import { createCronScheduler } from '../scheduler/CronScheduler';
@@ -314,15 +320,35 @@ program
       await templateEngine.loadTemplates();
       await templateEngine.validateTemplate(options.template);
 
-      const imageGenerator = createImageGenerator('placeholder', './output/images');
+      const imageGenerator = resolveImageGenerator('./output/images');
+      // gemini 설정 시에만 이미지 생성 (placeholder 모드에서는 네트워크 호출 없이 진행)
+      const images = resolveGeminiImageConfig()
+        ? await generateImagesSafely(
+            imageGenerator,
+            interleaveImageSpecs(
+              buildProductImagePrompts({
+                productName: product.name,
+                categoryName: product.categoryName,
+                brand: product.brand,
+              }).map((prompt) => ({ prompt })),
+              buildSectionImageSpecs({
+                productName: product.name,
+                categoryName: product.categoryName,
+              })
+                .slice(0, 3)
+                .map((spec) => ({ key: spec.key, prompt: spec.prompt })),
+            ),
+          )
+        : { urls: [], localPaths: [], sectionImages: {} };
+
       const postAssembler = createPostAssembler(templateEngine, imageGenerator);
 
       const post = await postAssembler.assemble({
         template: options.template,
         affiliateData: product,
         platform: options.platform,
+        images,
       });
-
       if (options.dryRun) {
         const outputDir = `./output/posts/${post.id}`;
         fs.mkdirSync(outputDir, { recursive: true });
