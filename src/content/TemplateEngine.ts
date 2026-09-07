@@ -396,6 +396,18 @@ export class TemplateEngineImpl implements TemplateEngine {
     return this.templates.get(templateName)?.frontmatter || null;
   }
 
+  /**
+   * 템플릿 본문 원문(frontmatter 제거된 handlebars 소스)을 반환한다.
+   *
+   * 이슈 #20 원인 D: 생성 이미지 수를 본문 슬롯 수와 맞추려면 템플릿이 실제로
+   * 참조하는 `sectionImages.<key>` 슬롯을 알아야 한다. 프론트매터에는 슬롯 정보가
+   * 없으므로 본문 소스를 노출해 imagePrompts.extractSectionImageSlots가 문서 순서로
+   * 스캔하게 한다. 미로드/미존재 템플릿은 null.
+   */
+  getTemplateSource(templateName: string): string | null {
+    return this.templates.get(templateName)?.content ?? null;
+  }
+
   getAllTemplateInfos(): Map<string, TemplateFrontmatter> {
     const infos = new Map<string, TemplateFrontmatter>();
     for (const [name, template] of this.templates) {

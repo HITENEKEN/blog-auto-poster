@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { prepareNaverHtml } from '../../src/content/NaverHtml';
+import { isSurvivableHref, prepareNaverHtml } from '../../src/content/NaverHtml';
 
 describe('prepareNaverHtml — 네이버 발행용 정규화(이슈 #10)', () => {
   it('script 태그를 제거한다', () => {
@@ -42,5 +42,102 @@ describe('prepareNaverHtml — 네이버 발행용 정규화(이슈 #10)', () =>
 
   it('빈 문자열은 그대로 반환한다', () => {
     expect(prepareNaverHtml('')).toBe('');
+  });
+
+  describe('prepareNaverHtml — iframe 제거(이슈 #20 원인 B)', () => {
+    it('iframe 요소를 완전히 제거한다', () => {
+      const out = prepareNaverHtml(
+        '<p>앞</p><iframe src="https://ads-partners.coupang.com/widgets.html?id=1"></iframe><p>뒤</p>',
+      );
+      expect(out).not.toContain('<iframe');
+      expect(out).not.toContain('ads-partners.coupang.com');
+      expect(out).toContain('<p>앞</p>');
+      expect(out).toContain('<p>뒤</p>');
+    });
+
+    it('iframe 내부 콘텐츠(fallback 텍스트)도 함께 제거된다 — 소실될 것이므로', () => {
+      const out = prepareNaverHtml('<iframe src="https://x.com/w"><p>폴백</p></iframe>');
+      expect(out).not.toContain('폴백');
+    });
+
+    it('여러 iframe을 모두 제거한다', () => {
+      const out = prepareNaverHtml(
+        '<iframe src="https://a"></iframe><p>x</p><iframe src="https://b"></iframe>',
+      );
+      expect(out.match(/<iframe/g)).toBeNull();
+      expect(out).toContain('<p>x</p>');
+    });
+  });
+
+  describe('prepareNaverHtml — 비-http 앵커 언래핑(이슈 #20 원인 C)', () => {
+    it('href="#" 앵커를 벗겨 내부 텍스트만 남긴다(죽은 버튼 방지)', () => {
+      const out = prepareNaverHtml('<a href="#" class="ncr-cta">🛒 가격 확인하기</a>');
+      expect(out).not.toContain('<a ');
+      expect(out).not.toContain('href="#"');
+      expect(out).toContain('🛒 가격 확인하기');
+    });
+
+    it('href가 없거나 빈 앵커도 벗긴다', () => {
+      const out = prepareNaverHtml('<a>텍스트</a><a href="">빈값</a>');
+      expect(out).not.toContain('<a');
+      expect(out).toContain('텍스트');
+      expect(out).toContain('빈값');
+    });
+
+    it('javascript:/상대경로 href도 벗긴다', () => {
+      const out = prepareNaverHtml(
+        '<a href="javascript:void(0)">js</a><a href="/local">상대</a><a href="foo/bar">상대2</a>',
+      );
+      expect(out).not.toContain('<a');
+      expect(out).toContain('js');
+      expect(out).toContain('상대');
+      expect(out).toContain('상대2');
+    });
+
+    it('실제 https 링크는 그대로 보존한다', () => {
+      const html =
+        '<a href="https://link.coupang.com/re/AFF?lptag=AF1" rel="nofollow sponsored">바로가기</a>';
+      const out = prepareNaverHtml(html);
+      expect(out).toContain('href="https://link.coupang.com/re/AFF?lptag=AF1"');
+      expect(out).toContain('rel="nofollow sponsored"');
+      expect(out).toContain('바로가기');
+    });
+
+    it('이미지를 감싼 죽은 앵커는 벗기되 이미지는 남긴다', () => {
+      const out = prepareNaverHtml(
+        '<a href="#"><img src="https://img1a.coupangcdn.com/banner.jpg" alt="배너" /></a>',
+      );
+      expect(out).not.toContain('<a');
+      expect(out).toContain('<img src="https://img1a.coupangcdn.com/banner.jpg"');
+    });
+
+    it('실제 링크와 죽은 링크가 섞여 있으면 죽은 링크만 벗긴다', () => {
+      const out = prepareNaverHtml(
+        '<p><a href="https://a.com">살아있는</a></p><p><a href="#">죽은</a></p>',
+      );
+      expect(out).toContain('<a href="https://a.com">살아있는</a>');
+      expect(out).not.toContain('href="#"');
+      expect(out).toContain('죽은');
+    });
+  });
+
+  describe('isSurvivableHref — SE가 href를 유지하는 스킴 판정(이슈 #20 원인 C)', () => {
+    it('http/https/mailto/tel은 살아남는다', () => {
+      expect(isSurvivableHref('http://a.com')).toBe(true);
+      expect(isSurvivableHref('https://a.com')).toBe(true);
+      expect(isSurvivableHref('mailto:a@b.com')).toBe(true);
+      expect(isSurvivableHref('tel:01012345678')).toBe(true);
+    });
+
+    it('빈 값/#/javascript:/상대경로/undefined는 죽은 링크다', () => {
+      expect(isSurvivableHref('')).toBe(false);
+      expect(isSurvivableHref('   ')).toBe(false);
+      expect(isSurvivableHref('#')).toBe(false);
+      expect(isSurvivableHref('#top')).toBe(false);
+      expect(isSurvivableHref('javascript:void(0)')).toBe(false);
+      expect(isSurvivableHref('/relative')).toBe(false);
+      expect(isSurvivableHref('foo/bar')).toBe(false);
+      expect(isSurvivableHref(undefined)).toBe(false);
+    });
   });
 });

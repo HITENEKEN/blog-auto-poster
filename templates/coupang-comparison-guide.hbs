@@ -141,9 +141,12 @@ jsonLd:
 {{#each this.pros}}<span class="ccg-tag pro">✅ {{this}}</span>{{/each}}
 {{#each this.cons}}<span class="ccg-tag con">❌ {{this}}</span>{{/each}}
 </div>
+{{!-- 이슈 #20 원인 C: 항목별 affiliateUrl이 비면 죽은 버튼이 발행되므로 아예 렌더하지 않는다 --}}
+{{#if this.affiliateUrl}}
 <a href="{{this.affiliateUrl}}" target="_blank" rel="nofollow sponsored" class="ccg-cta">
 🛒 {{this.name}} 최저가 확인하기
 </a>
+{{/if}}
 </div>
 </div>
 </div>

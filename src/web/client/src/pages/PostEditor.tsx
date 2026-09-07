@@ -8,7 +8,7 @@ import { Input } from './ui/Input';
 import { Select } from './ui/Select';
 import { useToast } from './ui/use-toast';
 import RichEditor from '../components/Editor/RichEditor';
-import { ArrowLeft, Check, Loader2, Rocket, Save, Sparkles, X } from 'lucide-react';
+import { ArrowLeft, Check, Eye, Loader2, Rocket, Save, Sparkles, X } from 'lucide-react';
 
 interface PostPayload {
   post: {
@@ -44,6 +44,10 @@ export default function PostEditor() {
   const [aiHistory, setAiHistory] = useState<
     Array<{ prompt: string; status: 'success' | 'error'; message?: string }>
   >([]);
+  // 발행 미리보기(이슈 #17) — 실제 발행 변환 체인을 적용한 HTML을 서버에서 받아 표시
+  const [showPreview, setShowPreview] = useState(false);
+  const [previewHtml, setPreviewHtml] = useState('');
+  const [previewLoading, setPreviewLoading] = useState(false);
 
   const fetchPost = useCallback(async () => {
     if (!id) return;
@@ -92,15 +96,78 @@ export default function PostEditor() {
     }
   };
 
+  const handlePreview = async () => {
+    if (!id) return;
+    // 미리보기는 서버에 저장된 본문 기준 — 먼저 자동 저장해 편집 중인 내용을 반영한다.
+    if (showPreview) {
+      setShowPreview(false);
+      return;
+    }
+    setPreviewLoading(true);
+    try {
+      await api.put(`/api/posts/${id}`, { content, title });
+      const response = await api.get<{ html: string }>(`/api/posts/${id}/publish-preview`, {
+        params: { platform: platform || 'naver' },
+      });
+      setPreviewHtml(response.data.html);
+      setShowPreview(true);
+    } catch {
+      toast({
+        title: '미리보기 실패',
+        description: '발행 변환 미리보기를 가져오지 못했습니다.',
+        variant: 'destructive',
+      });
+    } finally {
+      setPreviewLoading(false);
+    }
+  };
+
   const handlePublish = async () => {
     if (!id || !platform) return;
     setPublishing(true);
     try {
       // 발행 전 자동 저장 — 에디터에서 수정한 내용이 반드시 발행물에 반영되도록 한다.
       await api.put(`/api/posts/${id}`, { content, title });
-      await api.post(`/api/posts/${id}/publish`, { platform, aiPolish });
-      toast({ title: '발행되었습니다' });
-      navigate('/posts');
+      // 브라우저 발행은 이미지 업로드를 포함해 수 분이 걸릴 수 있다(서버 최대
+      // 180초+AI polish). 기본 30초 타임아웃으로 끊기면 UI는 실패로 표시되지만
+      // 서버는 계속 발행을 진행해 실제로는 발행되는 오판이 생긴다(이슈 #16).
+      const response = await api.post<{
+        results: Array<{
+          platform: string;
+          success?: boolean;
+          error?: string;
+          url?: string;
+          warnings?: string[];
+        }>;
+      }>(`/api/posts/${id}/publish`, { platform, aiPolish }, { timeout: 600000 });
+      const results = response.data.results ?? [];
+      const failed = results.filter((r) => r.success !== true);
+      const succeeded = results.filter((r) => r.success === true);
+      const warnings = results.flatMap((r) => r.warnings ?? []);
+      if (failed.length === 0) {
+        toast({
+          title: warnings.length > 0 ? '발행되었습니다 (일부 이미지 누락)' : '발행되었습니다',
+          description:
+            warnings.length > 0
+              ? `${succeeded[0]?.url ?? ''}\n${warnings.slice(0, 3).join('\n')}`
+              : succeeded[0]?.url,
+        });
+        navigate('/posts');
+      } else if (succeeded.length > 0) {
+        toast({
+          title: '일부 플랫폼 발행 실패',
+          description: failed.map((f) => `${f.platform}: ${f.error ?? '원인 불명'}`).join('\n'),
+          variant: 'destructive',
+        });
+        navigate('/posts');
+      } else {
+        toast({
+          title: '발행 실패',
+          description: failed[0]?.error ?? undefined,
+          variant: 'destructive',
+        });
+        setPublishing(false);
+      }
     } catch (error) {
       toast({
         title: '발행 실패',
@@ -247,8 +314,30 @@ export default function PostEditor() {
             />
           </div>
           <div>
-            <label className="mb-1 block text-sm font-medium">본문</label>
+            <div className="mb-1 flex items-center justify-between">
+              <label className="block text-sm font-medium">본문</label>
+              <Button variant="outline" size="sm" onClick={handlePreview} disabled={previewLoading}>
+                {previewLoading ? (
+                  <Loader2 className="mr-2 h-3 w-3 animate-spin" />
+                ) : (
+                  <Eye className="mr-2 h-3 w-3" />
+                )}
+                {showPreview ? '미리보기 닫기' : '발행 미리보기'}
+              </Button>
+            </div>
             <RichEditor mode="post" content={content} onUpdate={setContent} />
+            {showPreview && (
+              <div className="mt-3">
+                <p className="mb-1 text-xs text-muted-foreground">
+                  실제 발행 변환(위젯 확장 · 네이버 스타일 인라인 · 제목 평탄화)이 적용된
+                  미리보기입니다. AI 최종 다듬기와 링크 카드는 발행 시점에 적용됩니다.
+                </p>
+                <div
+                  className="max-h-[600px] overflow-y-auto rounded-md border border-input bg-white p-4"
+                  dangerouslySetInnerHTML={{ __html: previewHtml }}
+                />
+              </div>
+            )}
           </div>
         </CardContent>
       </Card>

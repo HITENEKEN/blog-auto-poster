@@ -1,4 +1,5 @@
 import React, { useState } from 'react';
+import { Navigate, useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import { isAxiosError } from 'axios';
 import { Card, CardContent, CardHeader, CardTitle } from './ui/Card';
@@ -7,12 +8,18 @@ import { Input } from './ui/Input';
 import { Eye, EyeOff, Loader2 } from 'lucide-react';
 
 export default function Login() {
-  const { login } = useAuth();
+  const { login, isAuthenticated } = useAuth();
+  const navigate = useNavigate();
   const [username, setUsername] = useState('admin');
   const [password, setPassword] = useState('changeme');
   const [showPassword, setShowPassword] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
+
+  // 이미 인증된 사용자가 /login에 접근하면 대시보드로 보낸다.
+  if (isAuthenticated) {
+    return <Navigate to="/" replace />;
+  }
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -21,6 +28,10 @@ export default function Login() {
 
     try {
       await login(username, password);
+      // 로그인 성공 후 대시보드로 이동한다 — /login 라우트는 인증 상태에서 자동
+      // 리다이렉트되지 않으므로 여기서 명시적으로 이동하지 않으면 화면이 그대로
+      // 머물러 "아무 반응이 없는 것처럼" 보인다.
+      navigate('/', { replace: true });
     } catch (err) {
       setError(
         (isAxiosError<{ message?: string }>(err) && err.response?.data?.message) ||

@@ -27,12 +27,16 @@ import {
   resolveImageGenerator,
   resolveGeminiImageConfig,
   generateImagesSafely,
-  interleaveImageSpecs,
 } from '@content/ImageGenerator';
-import { buildProductImagePrompts, buildSectionImageSpecs } from '@content/imagePrompts';
+import { buildSectionImageSpecs } from '@content/imagePrompts';
 import { createPostAssembler } from '@content/PostAssembler';
-import { expandCoupangWidgets } from '@content/CoupangWidgets';
+import { expandCoupangWidgetsReport } from '@content/CoupangWidgets';
+import { buildPublishPreviewHtml, rewriteLocalImageSrcsForWeb } from '@content/PublishPreview';
+import { addLinkPreset, deleteLinkPreset, loadLinkPresets } from '@content/LinkPresetStore';
+import { fillCtaAffiliateUrl, placePresetsInContent } from '@content/WidgetPlacement';
+import { COUPANG_WIDGET_KINDS, type CoupangWidgetKind } from '@content/CoupangWidgets';
 import { fetchLinkPreviewCards, stylePublishHtml } from '@content/CoupangPreview';
+import { collectWidgetCards } from '@content/PartnersWidget';
 import { generateDraftFromKeyword } from '@content/KeywordPostGenerator';
 import {
   savePostFiles,
@@ -1026,23 +1030,15 @@ export async function registerRoutes(app: FastifyInstance, context: RouteContext
 
     const imageGenerator = resolveImageGenerator('./output/images');
     const postAssembler = createPostAssembler(templateEngine, imageGenerator);
-    // R5: gemini 설정 시에만 상품+섹션 이미지 생성 (미설정/실패 시 images 없이 발행)
+    // R5: gemini 설정 시에만 이미지 생성 (미설정/실패 시 images 없이 발행)
+    // 이슈 #11: 상품 실물 이미지는 생성하지 않고 본문 관련 섹션 이미지만 생성
     const images = resolveGeminiImageConfig()
       ? await generateImagesSafely(
           imageGenerator,
-          interleaveImageSpecs(
-            buildProductImagePrompts({
-              productName: product.name,
-              categoryName: product.categoryName,
-              brand: product.brand,
-            }).map((prompt) => ({ prompt })),
-            buildSectionImageSpecs({
-              productName: product.name,
-              categoryName: product.categoryName,
-            })
-              .slice(0, 3)
-              .map((spec) => ({ key: spec.key, prompt: spec.prompt })),
-          ),
+          buildSectionImageSpecs({
+            productName: product.name,
+            categoryName: product.categoryName,
+          }).map((spec) => ({ key: spec.key, prompt: spec.prompt })),
         )
       : { urls: [], localPaths: [], sectionImages: {} };
 
@@ -1237,6 +1233,54 @@ export async function registerRoutes(app: FastifyInstance, context: RouteContext
     }
   });
 
+  // 링크/배너 프리셋 관리(이슈 #18) — 사용자가 직접 등록한 링크/배너만
+  // 발행 시 본문에 자동 배치된다(AI는 임의 링크를 생성하지 않는다).
+  app.get('/api/link-presets', async () => {
+    return { presets: loadLinkPresets() };
+  });
+
+  app.post('/api/link-presets', async (request) => {
+    const body = request.body as {
+      label?: string;
+      kind?: string;
+      props?: { url?: string; text?: string; imageUrl?: string; snippet?: string };
+    };
+    if (!body.kind || !COUPANG_WIDGET_KINDS.includes(body.kind as CoupangWidgetKind)) {
+      return { error: `kind must be one of: ${COUPANG_WIDGET_KINDS.join(', ')}` };
+    }
+    const preset = addLinkPreset({
+      label: body.label ?? '',
+      kind: body.kind as CoupangWidgetKind,
+      props: body.props ?? {},
+    });
+    return { preset };
+  });
+
+  app.delete('/api/link-presets/:id', async (request) => {
+    const { id } = request.params as { id: string };
+    if (!deleteLinkPreset(id)) {
+      return { error: 'Preset not found' };
+    }
+    return { ok: true };
+  });
+
+  // 발행 미리보기(이슈 #17) — 편집 화면이 실제 발행물과 동일한 렌더링을 볼 수 있게
+  // 발행 변환 체인(위젯 확장 → 스타일 정리 → naver 인라인/평탄화)을 적용해 반환한다.
+  // AI polish와 링크 미리보기 카드(네트워크 의존)는 발행 시점에만 적용된다.
+  app.get('/api/posts/:id/publish-preview', async (request) => {
+    const { id } = request.params as { id: string };
+    const { platform } = request.query as { platform?: string };
+    const postPath = `./output/posts/${id}/meta.json`;
+    const fs = await import('fs');
+    if (!fs.existsSync(postPath)) {
+      return { error: 'Post not found' };
+    }
+    const content = fs.readFileSync(`./output/posts/${id}/post.html`, 'utf-8');
+    const targetPlatform = platform || 'naver';
+    const html = rewriteLocalImageSrcsForWeb(buildPublishPreviewHtml(content, targetPlatform));
+    return { html, platform: targetPlatform };
+  });
+
   app.post('/api/posts/:id/publish', async (request) => {
     const { id } = request.params as { id: string };
     const { platform } = request.body as { platform?: string };
@@ -1273,6 +1317,41 @@ export async function registerRoutes(app: FastifyInstance, context: RouteContext
       }
     }
 
+    // 사용자 등록 링크/배너 프리셋 자동 배치(이슈 #18) — AI polish 이후 실행해
+    // AI가 프리셋 마커를 임의로 지우거나 재배치하지 못하게 한다. 본문에 위젯이
+    // 이미 있으면(사용자 직접 삽입) 배치하지 않는다.
+    const presets = loadLinkPresets();
+    const contentBeforePresets = content;
+    const placement = placePresetsInContent(content, presets);
+    if (placement.placed.length > 0) {
+      content = placement.html;
+      logger.info(
+        { postId: id, placed: placement.placed },
+        'Publish: user link presets placed into content',
+      );
+    }
+
+    // CTA 제휴 URL 채우기(이슈 #20 원인 C) — 생성 시점엔 affiliateUrl이 비어 있어
+    // 템플릿이 CTA 자체를 렌더하지 않는다(T6). 사용자가 등록한 첫 product-link
+    // 프리셋 URL이 있으면 본문 속 죽은 CTA 앵커(href ''/'#')에 실제 링크를 채운다.
+    // 프리셋이 없으면 생략한다 — CTA는 없는 상태로 발행된다(죽은 버튼 방지).
+    const ctaUrl = presets.find((p) => p.kind === 'product-link' && p.props?.url)?.props?.url ?? '';
+    if (ctaUrl) {
+      const filled = fillCtaAffiliateUrl(content, ctaUrl);
+      if (filled !== content) {
+        content = filled;
+        logger.info({ postId: id }, 'Publish: CTA affiliate url filled from link preset');
+      }
+    }
+
+    if (content !== contentBeforePresets) {
+      fs.writeFileSync(`./output/posts/${id}/post.html`, content);
+      for (const key of Object.keys(postMeta.platformContent || {})) {
+        postMeta.platformContent[key].content = content;
+      }
+      fs.writeFileSync(postPath, JSON.stringify(postMeta, null, 2));
+    }
+
     const targetPlatforms = platform ? [platform] : Object.keys(postMeta.platformContent || {});
 
     const results: PublishAttempt[] = [];
@@ -1302,15 +1381,52 @@ export async function registerRoutes(app: FastifyInstance, context: RouteContext
         coupangAdapter ?? undefined,
       ).catch(() => new Map<number, string>());
 
-      // 2) 위젯 마커 확장 — platform을 전달해 네이버 발행 시 script 위젯을 iframe
-      //    위젯으로 변환하고(이슈 #10), 위젯을 중앙 정렬 컨테이너로 감싼다(이슈 #12).
-      platformContent.content = expandCoupangWidgets(platformContent.content, {
+      // 1-b) 임베드 위젯 → 실제 상품 카드 수집(이슈 #20 T4). 네이버는 iframe을
+      //    100% 제거하므로(원인 B) 파트너스 위젯 자리엔 인라인 상품 카드를 발행한다.
+      //    마커별 네트워크 실패는 격리되고, 카드를 못 만든 마커만 drop으로 기록된다.
+      const widgetCards = await collectWidgetCards(platformContent.content).catch(
+        (error: unknown) => {
+          logger.warn(
+            { postId: id, platform: platformName, error: String(error) },
+            'Publish: partners widget card collection failed',
+          );
+          return new Map<number, string>();
+        },
+      );
+
+      // 2) 위젯 마커 확장 — 사전 수집한 카드(미리보기 #12 / 위젯 상품 카드 #20)로
+      //    마커를 치환하고, 발행 시점에는 위젯을 중앙 정렬 컨테이너로 감싼다(#12).
+      //    drop 리포트로 유실된 위젯을 추적한다(이슈 #15 — 조용한 유실 방지).
+      const widgetReport = expandCoupangWidgetsReport(platformContent.content, {
         platform: platformName,
         previewCards,
+        widgetCards,
       });
+      if (widgetReport.dropped.length > 0) {
+        logger.warn(
+          { postId: id, platform: platformName, dropped: widgetReport.dropped },
+          'Publish: coupang widgets dropped during expansion',
+        );
+      }
 
       // 3) 발행 시점 전 위젯/이미지 스타일 정리(이슈 #12)
-      platformContent.content = stylePublishHtml(platformContent.content);
+      platformContent.content = stylePublishHtml(widgetReport.html);
+
+      // 발행 직후 잔존 마커 검증(이슈 #15) — 확장되지 않은 마커가 남으면
+      // 에디터→발행물 유실 가능성이 있으므로 명시적으로 기록한다.
+      const leftoverMarkers = (platformContent.content.match(/data-coupang-widget/g) ?? []).length;
+      if (leftoverMarkers > 0) {
+        logger.error(
+          { postId: id, platform: platformName, leftoverMarkers },
+          'Publish: unexpanded coupang widget markers remain after expansion',
+        );
+      }
+
+      // 프론트엔드에 위젯 유실 경고를 전달한다(이슈 #15).
+      const widgetWarnings: string[] = widgetReport.dropped.map((d) => `${d.kind}: ${d.reason}`);
+      if (leftoverMarkers > 0) {
+        widgetWarnings.push(`unexpanded markers: ${leftoverMarkers}`);
+      }
 
       // #7: 발행 대상 이미지 로컬 경로 수집 (meta.images → post.html <img> 폴백) —
       // 네이버 등 브라우저 발행 어댑터가 에디터에 업로드한다.
@@ -1323,6 +1439,8 @@ export async function registerRoutes(app: FastifyInstance, context: RouteContext
 
       try {
         const result = await adapter.createPost(platformContent);
+        // 이미지 업로드 실패 등 어댑터 경고를 사용자에게 전달한다(이슈 #19).
+        const adapterWarnings = (result.warnings ?? []).map((w) => `image: ${w}`);
         jobQueue.recordPublishedPost({
           platform: platformName,
           postId: result.postId,
@@ -1335,7 +1453,13 @@ export async function registerRoutes(app: FastifyInstance, context: RouteContext
           // draftId: 편집화면 재진입/재발행용 드래프트 디렉터리 id (이슈 #10)
           metadata: { result, draftId: id },
         });
-        results.push({ platform: platformName, ...result, success: true });
+        results.push({
+          platform: platformName,
+          ...result,
+          success: true,
+          widgetWarnings,
+          warnings: [...widgetWarnings, ...adapterWarnings],
+        });
       } catch (error) {
         jobQueue.recordPublishedPost({
           platform: platformName,

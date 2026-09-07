@@ -7,9 +7,8 @@ import {
   resolveImageGenerator,
   generateImagesSafely,
   resolveGeminiImageConfig,
-  interleaveImageSpecs,
 } from '../content/ImageGenerator';
-import { buildProductImagePrompts, buildSectionImageSpecs } from '../content/imagePrompts';
+import { buildSectionImageSpecs } from '../content/imagePrompts';
 import { createPostAssembler } from '../content/PostAssembler';
 import { createJobQueue } from '../scheduler/JobQueue';
 import { createCronScheduler } from '../scheduler/CronScheduler';
@@ -322,22 +321,14 @@ program
 
       const imageGenerator = resolveImageGenerator('./output/images');
       // gemini 설정 시에만 이미지 생성 (placeholder 모드에서는 네트워크 호출 없이 진행)
+      // 이슈 #11: 상품 실물 이미지는 생성하지 않고 본문 관련 섹션 이미지만 생성
       const images = resolveGeminiImageConfig()
         ? await generateImagesSafely(
             imageGenerator,
-            interleaveImageSpecs(
-              buildProductImagePrompts({
-                productName: product.name,
-                categoryName: product.categoryName,
-                brand: product.brand,
-              }).map((prompt) => ({ prompt })),
-              buildSectionImageSpecs({
-                productName: product.name,
-                categoryName: product.categoryName,
-              })
-                .slice(0, 3)
-                .map((spec) => ({ key: spec.key, prompt: spec.prompt })),
-            ),
+            buildSectionImageSpecs({
+              productName: product.name,
+              categoryName: product.categoryName,
+            }).map((spec) => ({ key: spec.key, prompt: spec.prompt })),
           )
         : { urls: [], localPaths: [], sectionImages: {} };
 

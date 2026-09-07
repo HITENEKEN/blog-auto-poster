@@ -45,13 +45,13 @@ describe('buildProductImagePrompts', () => {
 
 describe('buildSectionImageSpecs', () => {
   it('uses default sections whose keys match SECTION_IMAGE_KEYS', () => {
-    const specs = buildSectionImageSpecs({ productName: '공기청정기' });
+    const specs = buildSectionImageSpecs({ categoryName: '공기청정기' });
     expect(specs.map((s) => s.key)).toEqual([...SECTION_IMAGE_KEYS]);
   });
 
   it('builds prompts from custom section titles and summaries', () => {
     const specs = buildSectionImageSpecs({
-      productName: '공기청정기',
+      categoryName: '공기청정기',
       sections: [{ key: 'usage', title: '직접 사용해 본 모습', summary: '거실에서 2주 사용' }],
     });
     expect(specs).toHaveLength(1);
@@ -60,6 +60,18 @@ describe('buildSectionImageSpecs', () => {
     expect(specs[0].prompt).toContain('공기청정기');
     expect(specs[0].prompt).toContain('직접 사용해 본 모습');
     expect(specs[0].prompt).toContain('거실에서 2주 사용');
+  });
+
+  it('제품명을 프롬프트에 넣지 않는다 (이슈 #11 — 상품 오인 방지)', () => {
+    const specs = buildSectionImageSpecs({
+      productName: '게스청바지 501',
+      categoryName: '청바지',
+    });
+    for (const spec of specs) {
+      expect(spec.prompt).toContain('청바지'); // 카테고리(주제)는 맥락으로 사용
+      expect(spec.prompt).not.toContain('게스'); // 브랜드/제품명 배제
+      expect(spec.prompt).toContain('식별 불가'); // 제품 묘사 금지 지시
+    }
   });
 });
 

@@ -21,6 +21,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '.
 import { toast } from './ui/use-toast';
 import { api } from '../services/api';
 import { LLM_PROVIDER_OPTIONS } from '@shared/llmProviders';
+import LinkPresetsManager from '../components/LinkPresetsManager';
 
 interface SettingsData {
   general: {
@@ -447,6 +448,10 @@ export default function Settings() {
             <Shield className="h-4 w-4 mr-2" />
             이미지 생성 AI
           </TabsTrigger>
+          <TabsTrigger value="linkPresets">
+            <Key className="h-4 w-4 mr-2" />
+            링크 프리셋
+          </TabsTrigger>
           <TabsTrigger value="notifications">
             <Bell className="h-4 w-4 mr-2" />
             알림
@@ -827,6 +832,10 @@ export default function Settings() {
             )}
             저장
           </Button>
+        </TabsContent>
+
+        <TabsContent value="linkPresets" className="mt-4 space-y-4">
+          <LinkPresetsManager />
         </TabsContent>
 
         <TabsContent value="notifications" className="mt-4 space-y-4">

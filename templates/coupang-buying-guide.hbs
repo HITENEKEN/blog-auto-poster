@@ -69,7 +69,10 @@ seo:
 <div class="cbg-budget-body">
 <p class="cbg-pick">{{this.productName}}</p>
 <p class="cbg-reason">{{this.reason}}</p>
+{{!-- 이슈 #20 원인 C: 항목별 affiliateUrl이 비면 죽은 버튼이 발행되므로 아예 렌더하지 않는다 --}}
+{{#if this.affiliateUrl}}
 <a href="{{this.affiliateUrl}}" target="_blank" rel="nofollow sponsored" class="cbg-cta-sm">🛒 가격 확인하기</a>
+{{/if}}
 </div>
 </div>
 {{/each}}
@@ -83,7 +86,10 @@ seo:
 <div class="cbg-best" style="background:#f3f0ff;border:2px solid #7048e8;">
 <p style="font-size:1.15rem;font-weight:700;margin:0 0 8px;">{{topPick.productName}}</p>
 <p style="margin:0 0 12px;font-size:.95rem;color:#495057;">{{topPick.reason}}</p>
+{{!-- 이슈 #20 원인 C: topPick.affiliateUrl이 비면 죽은 버튼이 발행되므로 아예 렌더하지 않는다 --}}
+{{#if topPick.affiliateUrl}}
 <a href="{{topPick.affiliateUrl}}" target="_blank" rel="nofollow sponsored" class="cbg-cta-sm">🛒 최저가 확인하기</a>
+{{/if}}
 </div>
 </div>
 {{/if}}

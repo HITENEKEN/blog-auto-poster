@@ -1,8 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import {
   COUPANG_WIDGET_KINDS,
-  buildPartnersIframeSnippet,
   expandCoupangWidgets,
+  expandCoupangWidgetsReport,
   parsePartnersCoupangScript,
 } from '../../src/content/CoupangWidgets';
 
@@ -183,7 +183,7 @@ describe('expandCoupangWidgets — robustness', () => {
   });
 });
 
-describe('expandCoupangWidgets — platform: naver (script → iframe 변환)', () => {
+describe('expandCoupangWidgets — platform: naver (script/iframe 제거, 이슈 #20 원인 B)', () => {
   // 사용자 실제 스니펫(2026-08 저장본) — PartnersCoupang.G script 위젯
   const userSnippet = [
     '<script src="https://ads-partners.coupang.com/g.js"></script>',
@@ -192,26 +192,37 @@ describe('expandCoupangWidgets — platform: naver (script → iframe 변환)', 
     '</script>',
   ].join('\n');
 
-  it('naver 발행 시 PartnersCoupang.G script를 파트너스 iframe 위젯으로 변환한다', () => {
-    const out = expandCoupangWidgets(marker('dynamic-banner', { snippet: userSnippet }), {
+  it('script 전용 snippet은 naver에서 발행 불가 — iframe으로 변환하지 않고 drop 기록', () => {
+    // 원인 B: 네이버는 iframe을 100% 제거한다. iframe 변환은 매 발행마다 무결성
+    // 실패를 유발했으므로 폐기했다. 카드가 없으면 위젯 자리를 비우고 리포트한다.
+    const report = expandCoupangWidgetsReport(marker('dynamic-banner', { snippet: userSnippet }), {
+      platform: 'naver',
+    });
+    expect(report.html).not.toContain('<script');
+    expect(report.html).not.toContain('<iframe');
+    expect(report.expanded).toBe(0);
+    expect(report.dropped).toHaveLength(1);
+    expect(report.dropped[0].kind).toBe('dynamic-banner');
+  });
+
+  it('iframe snippet도 naver에서는 제거된다(네이버가 100% 제거하므로 발행하지 않는다)', () => {
+    const snippet = '<iframe src="https://coupa.ng/co9ktA" width="100%" height="75"></iframe>';
+    const report = expandCoupangWidgetsReport(marker('search-widget', { snippet }), {
+      platform: 'naver',
+    });
+    expect(report.html).not.toContain('<iframe');
+    expect(report.dropped).toHaveLength(1);
+  });
+
+  it('script와 안전 콘텐츠가 섞여 있으면 script만 걷어내고 나머지는 발행한다', () => {
+    const snippet =
+      '<script>new PartnersCoupang.G({"id":1});</script>' +
+      '<a href="https://link.coupang.com/a/x" target="_blank"><img src="https://ads-partners.coupang.com/banners/1" alt=""></a>';
+    const out = expandCoupangWidgets(marker('dynamic-banner', { snippet }), {
       platform: 'naver',
     });
     expect(out).not.toContain('<script');
-    expect(out).toContain('<iframe');
-    expect(out).toContain('https://ads-partners.coupang.com/widgets.html?');
-    expect(out).toContain('id=1022164');
-    expect(out).toContain('trackingCode=AF8963794');
-    expect(out).toContain('template=carousel');
-    expect(out).toContain('width=680');
-    expect(out).toContain('height=140');
-  });
-
-  it('iframe이 포함된 snippet은 naver에서도 유지된다(발행 시 컨테이너 래핑)', () => {
-    const snippet = '<iframe src="https://coupa.ng/co9ktA" width="100%" height="75"></iframe>';
-    const out = expandCoupangWidgets(marker('search-widget', { snippet }), {
-      platform: 'naver',
-    });
-    expect(out).toContain(snippet);
+    expect(out).toContain('https://link.coupang.com/a/x');
     expect(out).toContain('text-align:center');
   });
 
@@ -241,8 +252,8 @@ describe('expandCoupangWidgets — platform: naver (script → iframe 변환)', 
   });
 });
 
-describe('PartnersCoupang.G 파싱/iframe URL 빌더', () => {
-  it('script에서 파라미터를 추출한다', () => {
+describe('parsePartnersCoupangScript — 위젯 파라미터 추출', () => {
+  it('PartnersCoupang.G script에서 파라미터를 추출한다', () => {
     const params = parsePartnersCoupangScript(
       '<script>new PartnersCoupang.G({"id":1022164,"trackingCode":"AF8963794","subId":null,"template":"carousel"});</script>',
     );
@@ -254,30 +265,41 @@ describe('PartnersCoupang.G 파싱/iframe URL 빌더', () => {
     });
   });
 
+  it('PartnersCoupang.Carousel(서버 렌더) 형태는 logParams/config에서 복원한다', () => {
+    const params = parsePartnersCoupangScript(
+      'new PartnersCoupang.Carousel("#container", {"items":[{"name":"(1개)"}],' +
+        '"config":{"width":"680","height":"140"},' +
+        '"logParams":{"id":1022164,"widgetName":"carousel","trackingCode":"AF8963794"}});',
+    );
+    expect(params).toEqual({
+      id: 1022164,
+      trackingCode: 'AF8963794',
+      subId: undefined,
+      template: 'carousel',
+      width: '680',
+      height: '140',
+    });
+  });
+
+  it('상품명에 괄호가 섞여 있어도 객체 범위를 정확히 자른다', () => {
+    const params = parsePartnersCoupangScript(
+      'new PartnersCoupang.Carousel("#container", {"items":[{"name":"곰곰 쌀 (2kg) 1개"}],' +
+        '"logParams":{"id":7,"trackingCode":"AF"}});',
+    );
+    expect(params?.id).toBe(7);
+    expect(params?.trackingCode).toBe('AF');
+  });
+
   it('형식이 맞지 않으면 null을 반환한다', () => {
     expect(parsePartnersCoupangScript('<script>foo();</script>')).toBeNull();
     expect(parsePartnersCoupangScript('')).toBeNull();
     expect(parsePartnersCoupangScript('<script>new PartnersCoupang.G({broken</script>')).toBeNull();
   });
 
-  it('subId null/빈 값은 URL에서 생략한다', () => {
-    const snippet = buildPartnersIframeSnippet({
-      id: 1,
-      trackingCode: 'AF',
-      subId: null,
-      template: 'carousel',
-      width: '680',
-      height: '140',
-    })!;
-    expect(snippet).toContain('id=1');
-    expect(snippet).toContain('trackingCode=AF');
-    expect(snippet).not.toContain('subId');
-    expect(snippet).toContain('width="680"');
-    expect(snippet).toContain('height="140"');
-  });
-
-  it('id/trackingCode가 없으면 null을 반환한다', () => {
-    expect(buildPartnersIframeSnippet({ template: 'carousel' })).toBeNull();
+  it('id/trackingCode를 복원할 수 없으면 null을 반환한다', () => {
+    expect(
+      parsePartnersCoupangScript('new PartnersCoupang.Carousel("#c", {"items":[]});'),
+    ).toBeNull();
   });
 });
 
@@ -320,5 +342,50 @@ describe('expandCoupangWidgets — previewCards(미리보기 카드, 이슈 #12)
     );
     expect(out).toContain('text-align:center');
     expect(out).toContain('rel="nofollow sponsored"');
+  });
+});
+
+describe('expandCoupangWidgetsReport (#15) — 위젯 유실 리포트', () => {
+  it('정상 확장 시 dropped는 비어 있고 expanded는 마커 수', () => {
+    const html = [
+      marker('product-link', { url: 'https://link.coupang.com/a/1', text: '구매' }),
+      marker('ad-banner', {
+        url: 'https://link.coupang.com/a/b',
+        imageUrl: 'https://image.example.com/b.jpg',
+      }),
+    ].join('');
+    const report = expandCoupangWidgetsReport(html);
+    expect(report.expanded).toBe(2);
+    expect(report.dropped).toEqual([]);
+  });
+
+  it('props 누락 마커는 dropped에 사유와 함께 기록된다', () => {
+    const html = marker('product-link', { text: '링크' });
+    const report = expandCoupangWidgetsReport(html);
+    expect(report.dropped).toEqual([{ kind: 'product-link', reason: 'url prop missing' }]);
+    expect(report.expanded).toBe(0);
+  });
+
+  it('ad-banner의 url/imageUrl 누락도 기록된다', () => {
+    const report = expandCoupangWidgetsReport(marker('ad-banner', { url: 'https://x.com' }));
+    expect(report.dropped).toEqual([{ kind: 'ad-banner', reason: 'url/imageUrl prop missing' }]);
+  });
+
+  it('naver에서 카드 없는 script/iframe snippet은 사유를 기록한다(이슈 #20 원인 B)', () => {
+    const report = expandCoupangWidgetsReport(
+      marker('dynamic-banner', { snippet: '<script>alert(1)</script>' }),
+      { platform: 'naver' },
+    );
+    expect(report.dropped).toEqual([
+      {
+        kind: 'dynamic-banner',
+        reason: 'naver cannot publish this widget (script/iframe removed, no card)',
+      },
+    ]);
+  });
+
+  it('알 수 없는 kind도 기록한다', () => {
+    const report = expandCoupangWidgetsReport(marker('alien-widget', {}));
+    expect(report.dropped).toEqual([{ kind: 'alien-widget', reason: 'unknown widget kind' }]);
   });
 });

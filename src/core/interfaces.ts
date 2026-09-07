@@ -115,6 +115,11 @@ export interface PlatformPostResult {
   url: string;
   publishedAt: Date;
   platformData?: Record<string, unknown>;
+  /**
+   * 발행은 성공했지만 누락된 요소(이미지 업로드 실패 등)에 대한 경고.
+   * UI가 사용자에게 이미지 누락을 알릴 수 있게 한다(이슈 #19).
+   */
+  warnings?: string[];
 }
 
 export interface PlatformCredentials {
@@ -197,6 +202,8 @@ export interface TemplateEngine {
   render(templateName: string, data: TemplateData): Promise<TemplateRenderResult>;
   getTemplateNames(): string[];
   getTemplateInfo(templateName: string): TemplateFrontmatter | null;
+  /** 템플릿 본문 원문 — 본문 슬롯(sectionImages.*) 스캔용 (이슈 #20 원인 D) */
+  getTemplateSource(templateName: string): string | null;
   getAllTemplateInfos(): Map<string, TemplateFrontmatter>;
 }
 

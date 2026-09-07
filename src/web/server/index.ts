@@ -147,6 +147,15 @@ export async function createWebServer(options: WebServerOptions): Promise<Fastif
     prefix: '/',
   });
 
+  // 생성된 이미지 등 output/ 산출물을 웹에서 표시하기 위한 정적 서빙(이슈 #17/#19).
+  // 발행 미리보기가 로컬 이미지(<img src="output/images/...">)를 그대로 렌더링할 수
+  // 있게 한다. 두 번째 @fastify/static 등록이므로 reply 데코레이터는 중복 등록하지 않는다.
+  await app.register(import('@fastify/static'), {
+    root: path.resolve(process.cwd(), 'output'),
+    prefix: '/output/',
+    decorateReply: false,
+  });
+
   // Health check
   app.get('/health', async () => {
     const affiliateStatus = await affiliateRegistry.validateAll();

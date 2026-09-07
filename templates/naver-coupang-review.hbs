@@ -4,11 +4,13 @@ platforms: ["naver"]
 requiredFields:
   - "productName"
   - "price"
-  - "affiliateUrl"
   - "experienceIntro"
   - "realUsageStory"
   - "conclusion"
 optionalFields:
+  # 이슈 #20 원인 C — 생성 시점엔 빈 값이고 발행 시점에 fillCtaAffiliateUrl이 채운다.
+  # requiredFields에 두면 '' 값이 ValidationError를 낸다(TemplateEngine.validateTemplate).
+  - "affiliateUrl"
   - "categoryName"
   - "brand"
   - "originalPrice"
@@ -119,7 +121,10 @@ jsonLd:
     <span class="ncr-price">{{formatPrice price}}원</span>
     {{#if originalPrice}}<span class="ncr-original">{{formatPrice originalPrice}}원</span>{{/if}}
     {{#if discountRate}}<span class="ncr-discount">{{discountRate}}% 할인</span>{{/if}}
+    {{!-- 이슈 #20 원인 C: affiliateUrl이 비면 죽은 버튼(href="#")이 발행되므로 아예 렌더하지 않는다 --}}
+    {{#if affiliateUrl}}
     <a href="{{affiliateUrl}}" target="_blank" rel="nofollow sponsored" class="ncr-cta">🛒 {{productName}} 가격 확인하기</a>
+    {{/if}}
   </div>
 
   <!-- 선택 이유 -->

@@ -5,9 +5,12 @@ import {
   resolveImageGenerator,
   generateImagesSafely,
   resolveGeminiImageConfig,
-  interleaveImageSpecs,
 } from './ImageGenerator';
-import { buildProductImagePrompts, buildSectionImageSpecs } from './imagePrompts';
+import {
+  buildSectionImageMap,
+  buildSectionImageSpecs,
+  extractSectionImageSlots,
+} from './imagePrompts';
 import { createPostAssembler } from './PostAssembler';
 import { createContentGeneratorFromConfig } from './ContentGenerator';
 import { fetchTopPosts, fetchKeywordInsight } from './InsightFetch';
@@ -224,30 +227,45 @@ export async function generateDraftFromKeyword(input: {
     price: typeof generated.price === 'number' ? generated.price : 0,
     currency: 'KRW',
     productUrl: '',
-    // 템플릿 requiredFields 검증이 빈 문자열을 거부하므로 자리표시자 사용 —
-    // 실제 링크는 에디터에서 쿠팡 위젯(상품 링크)으로 삽입됨
-    affiliateUrl: '#',
+    // 이슈 #20 원인 C: '#'로 렌더하면 네이버 SmartEditor가 http(s)가 아닌 href를
+    // 버리고 텍스트만 남긴다 → "🛒 가격 확인하기"가 링크 없는 죽은 문구로 발행됐다.
+    // 빈 값으로 두고 템플릿은 {{#if affiliateUrl}}로 CTA 자체를 렌더하지 않으며,
+    // 실제 제휴 URL은 발행 시점에 fillCtaAffiliateUrl이 쿠팡 프리셋에서 채운다.
+    // (affiliateUrl은 requiredFields가 아니라 optionalFields — '' 값이 검증에 통과한다.)
+    affiliateUrl: '',
     topPosts,
   };
-  // R5 이미지 생성: 이미지 프로바이더(openai→gemini)가 설정된 경우에만 상품+섹션 프롬프트로 생성한다.
+  // R5 이미지 생성: 이미지 프로바이더(openai→gemini)가 설정된 경우에만 생성한다.
   // 미설정/실패 시 images 없이 진행(경고 로그) — placeholder 네트워크 호출·글 발행 지연 없음.
-  // 스펙은 상품/섹션 교차 배치(#8) — generateImagesSafely의 maxImagesPerPost 상한이
-  // 잘리더라도 상품 컷과 섹션 컷이 균형 있게 남도록 한다.
+  // 이슈 #11: 상품 실물 이미지(단독 컷/클로즈업)는 생성하지 않는다 — 실제 구매는
+  // 구매 링크로 유도하고, 생성 이미지로 상품을 오인하게 하지 않는다.
+  // 본문 내용과 관련된 섹션 이미지(사용 장면/스펙/비교/팁/체크리스트)만 생성하며,
+  // maxImagesPerPost 상한은 generateImagesSafely가 처리한다.
+  // 이슈 #20 원인 D: 템플릿이 "실제로 참조하는" 본문 슬롯만 문서 순서로 쓴다.
+  // 기존처럼 고정 SECTION_IMAGE_KEYS=[usage,specs,compare,tips,checklist] 순으로
+  // 배정하면 템플릿이 쓰지 않는 키(예: naver-coupang-review는 compare를 쓰지 않음)에
+  // 이미지가 배정돼 본문에 한 번도 등장하지 않는 고아가 생기고, 그만큼 실제 슬롯은
+  // 비어 생성 이미지가 본문 앞/끝에 몰렸다.
+  const sectionSlots = extractSectionImageSlots(
+    templateEngine.getTemplateSource(templateName) ?? '',
+  );
   const imageGenerator = resolveImageGenerator('./output/images');
   const images = resolveGeminiImageConfig()
     ? await generateImagesSafely(
         imageGenerator,
-        interleaveImageSpecs(
-          buildProductImagePrompts({ productName: keyword, categoryName: keyword }).map(
-            (prompt) => ({ prompt }),
-          ),
-          buildSectionImageSpecs({ productName: keyword, categoryName: keyword })
-            .slice(0, 3)
-            .map((spec) => ({ key: spec.key, prompt: spec.prompt })),
+        buildSectionImageSpecs({ categoryName: keyword, sectionKeys: sectionSlots }).map(
+          (spec) => ({
+            key: spec.key,
+            prompt: spec.prompt,
+          }),
         ),
       )
     : { urls: [], localPaths: [], sectionImages: {} };
-  templateData.sectionImages = images.sectionImages;
+  // hero(imageUrl)는 첫 번째 이미지, 섹션 슬롯은 "나머지" 이미지를 문서 순서로 배정한다.
+  // 이렇게 해야 같은 파일이 hero와 sectionImages.usage에 동시에 들어가는 중복이 사라지고
+  // (이슈 #20 원인 D), 각 이미지가 본문에 정확히 한 번 등장한다.
+  // generateImagesSafely가 만든 sectionImages(첫 경로를 slot[0]에도 넣음)는 쓰지 않는다.
+  templateData.sectionImages = buildSectionImageMap(images.localPaths.slice(1), sectionSlots);
   if (images.localPaths.length > 0) {
     templateData.imageUrl = images.localPaths[0];
   }

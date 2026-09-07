@@ -6,8 +6,9 @@ requiredFields:
   - "price"
   - "pros"
   - "cons"
-  - "affiliateUrl"
 optionalFields:
+  # 이슈 #20 원인 C — 생성 시점엔 빈 값, 발행 시점에 fillCtaAffiliateUrl이 채운다.
+  - "affiliateUrl"
   - "originalPrice"
   - "discountRate"
   - "rating"
@@ -140,7 +141,10 @@ jsonLd:
 <span class="cpr-price">{{formatPrice price}}원</span>
 {{#if originalPrice}}<span class="cpr-original">{{formatPrice originalPrice}}원</span>{{/if}}
 {{#if discountRate}}<span class="cpr-discount">{{discountRate}}% OFF</span>{{/if}}
+{{!-- 이슈 #20 원인 C: affiliateUrl이 비면 죽은 버튼이 발행되므로 아예 렌더하지 않는다 --}}
+{{#if affiliateUrl}}
 <a href="{{affiliateUrl}}" target="_blank" rel="nofollow sponsored" class="cpr-cta-primary">💰 최저가 확인하기</a>
+{{/if}}
 </div>
 
 <!-- ④ 장단점 표 -->
@@ -292,6 +296,9 @@ jsonLd:
 </div>
 {{/if}}
 
+{{!-- 이슈 #20 원인 C: affiliateUrl이 비면 "지금 최저가를 확인하세요 👇" 문구만 남고
+     버튼이 사라져 엉망이 되므로 블록째 렌더하지 않는다 --}}
+{{#if affiliateUrl}}
 <!-- ⑫ 최종 CTA -->
 <div class="cpr-final">
 <p style="margin:0 0 12px;font-weight:600;">지금 최저가를 확인하세요 👇</p>
@@ -299,6 +306,7 @@ jsonLd:
 🛒 {{productName}} 최저가 보러가기
 </a>
 </div>
+{{/if}}
 
 <!-- ⑬ 파트너스 고지 -->
 <div class="cpr-notice">

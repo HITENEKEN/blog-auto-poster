@@ -196,7 +196,15 @@ export class NaverAdapter implements PlatformAdapter {
           headless: true,
           images: imagePaths,
         });
-        return { postId: result.postId, url: result.url, publishedAt: new Date() };
+        // 이미지 업로드 실패 경고 전파(이슈 #19) — 발행 자체는 성공
+        return result.warnings && result.warnings.length > 0
+          ? {
+              postId: result.postId,
+              url: result.url,
+              publishedAt: new Date(),
+              warnings: result.warnings,
+            }
+          : { postId: result.postId, url: result.url, publishedAt: new Date() };
       } catch (error) {
         if (
           error instanceof ConfigurationError ||
