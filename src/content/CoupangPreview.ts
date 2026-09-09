@@ -2,6 +2,7 @@ import * as cheerio from 'cheerio';
 import axios from 'axios';
 import { getLogger } from '@core/logger';
 import type { AffiliateAdapter } from '@core/interfaces';
+import { normalizeLinkWidgetProps } from './CoupangWidgets';
 
 const logger = getLogger('coupang-preview');
 
@@ -187,6 +188,41 @@ function formatKrw(price: number): string {
   return `${price.toLocaleString('ko-KR')}원`;
 }
 
+/**
+ * 카드 마크업 규칙 (2026-09-07 실발행물 logNo 224400196736/224404059950에서 실측)
+ *
+ * SmartEditor ONE은 붙여넣은 HTML을 자기 모듈 모델로 접어 넣는다. 그 과정에서:
+ *  - `<a href="http…"><img></a>` → `se-image` + 이미지 링크(`data-linkdata.link`,
+ *    `linkUse:true`)로 **보존된다**.
+ *  - `<p><a href="http…">텍스트</a></p>` → `se-link` 텍스트 링크로 **보존된다**.
+ *  - 그러나 하나의 `<a>`가 이미지와 텍스트를 **함께** 감싸면, SE는 그 앵커를
+ *    이미지 링크로만 승격시키고 나머지 텍스트를 캡션으로 강등하면서
+ *    **텍스트 쪽 링크를 전부 버린다**(실측: 카드 3장에 `<a>` 0개, "🛒 쿠팡에서
+ *    보기"가 죽은 평문으로 발행됐다).
+ *  - flex/border/box-shadow 같은 레이아웃 인라인 스타일은 전부 버려진다. 그래서
+ *    가격·할인·CTA를 한 줄에 몰아넣으면 `"…상등급9,290원 33%↓🛒 쿠팡에서 보기"`
+ *    처럼 붙어서 발행된다.
+ *
+ * 그래서 카드는 **앵커를 이미지용/텍스트용으로 분리하고, 각 줄을 별도 문단**으로
+ * 만든다. 스타일은 살면 좋고 죽어도 읽히는 형태로만 쓴다.
+ */
+
+const CARD_WRAP_STYLE =
+  'max-width:640px;margin:24px auto;padding:14px 16px;border:1px solid #e9ecef;border-radius:12px;background:#fff;text-align:center';
+const CARD_LINK_ATTRS = 'target="_blank" rel="nofollow sponsored"';
+
+/** 카드 본문 링크 한 줄 — SE가 텍스트 링크로 보존하는 형태(문단 1개 = 앵커 1개). */
+function linkParagraph(url: string, inner: string, style: string): string {
+  return `<p style="${style}"><a href="${escapeHtml(url)}" ${CARD_LINK_ATTRS} style="color:inherit;text-decoration:none">${inner}</a></p>`;
+}
+
+/** 이미지 링크 블록 — SE가 `linkUse:true` 이미지 링크로 보존한다. */
+function imageLinkBlock(url: string, imageUrl: string, alt: string, imgStyle: string): string {
+  return `<p style="margin:0 0 10px"><a href="${escapeHtml(url)}" ${CARD_LINK_ATTRS}><img src="${escapeHtml(
+    imageUrl,
+  )}" alt="${alt}" style="${imgStyle}" /></a></p>`;
+}
+
 /** 상품 미리보기 카드 HTML(순수, 인라인 스타일) — 유닛 테스트 대상. */
 export function buildProductPreviewCard(
   url: string,
@@ -194,30 +230,56 @@ export function buildProductPreviewCard(
   fallbackText?: string,
 ): string {
   const title = escapeHtml(data.title || fallbackText || '쿠팡 상품');
-  const img = data.imageUrl
-    ? `<img src="${escapeHtml(data.imageUrl)}" alt="${title}" style="width:110px;height:110px;object-fit:cover;flex:none;border-radius:8px" />`
-    : `<span style="width:110px;height:110px;flex:none;display:flex;align-items:center;justify-content:center;background:#fff0f6;border-radius:8px;font-size:34px">🛍️</span>`;
-  const priceLine =
-    typeof data.price === 'number' && data.price > 0
-      ? `<span style="font-size:15px;color:#212529"><b>${formatKrw(data.price)}</b>${
-          data.originalPrice && data.originalPrice > data.price
-            ? ` <s style="color:#adb5bd;font-size:12px">${formatKrw(data.originalPrice)}</s>`
-            : ''
-        }${
-          data.discountRate
-            ? ` <span style="color:#e8590c;font-weight:700">${data.discountRate}%↓</span>`
-            : ''
-        }</span>`
-      : '';
-  const metaLine =
-    data.rating || data.reviewCount
-      ? `<span style="font-size:12px;color:#868e96">⭐ ${data.rating ?? '-'}${
-          data.reviewCount ? ` (${data.reviewCount.toLocaleString('ko-KR')}개 리뷰)` : ''
-        }</span>`
-      : '';
-  return `<div style="max-width:640px;margin:24px auto;border:1px solid #e9ecef;border-radius:12px;background:#fff;box-shadow:0 3px 12px rgba(0,0,0,.08);overflow:hidden"><a href="${escapeHtml(
-    url,
-  )}" target="_blank" rel="nofollow sponsored" style="text-decoration:none;color:inherit"><div style="display:flex;align-items:center;gap:14px;padding:14px 16px">${img}<div style="display:flex;flex-direction:column;gap:6px;min-width:0"><span style="font-size:15px;font-weight:700;color:#212529;line-height:1.5">${title}</span>${priceLine}${metaLine}<span style="display:inline-block;background:linear-gradient(135deg,#e64980,#f76707);color:#fff;font-size:13px;font-weight:700;padding:8px 18px;border-radius:20px;margin-top:2px">🛒 쿠팡에서 보기</span></div></div></a><div style="border-top:1px solid #f1f3f5;padding:6px 16px;font-size:11px;color:#adb5bd;text-align:right">이 포스팅은 쿠팡 파트너스 링크를 포함합니다</div></div>`;
+  const lines: string[] = [];
+
+  if (data.imageUrl) {
+    lines.push(
+      imageLinkBlock(
+        url,
+        data.imageUrl,
+        title,
+        'max-width:320px;width:100%;height:auto;border-radius:8px',
+      ),
+    );
+  }
+
+  lines.push(
+    linkParagraph(
+      url,
+      `<b style="font-size:15px;color:#212529">${title}</b>`,
+      'margin:0 0 6px;line-height:1.5',
+    ),
+  );
+
+  // 가격·할인·평점은 각각 별도 문단 — SE가 인라인 레이아웃을 버려도 붙지 않는다.
+  if (typeof data.price === 'number' && data.price > 0) {
+    const parts = [`<b style="color:#212529">${formatKrw(data.price)}</b>`];
+    if (data.originalPrice && data.originalPrice > data.price) {
+      parts.push(`<s style="color:#adb5bd">${formatKrw(data.originalPrice)}</s>`);
+    }
+    if (data.discountRate) {
+      parts.push(`<span style="color:#e8590c;font-weight:700">${data.discountRate}%↓</span>`);
+    }
+    lines.push(`<p style="margin:0 0 6px;font-size:14px">${parts.join(' · ')}</p>`);
+  }
+  if (data.rating || data.reviewCount) {
+    const reviews = data.reviewCount ? ` (${data.reviewCount.toLocaleString('ko-KR')}개 리뷰)` : '';
+    lines.push(
+      `<p style="margin:0 0 6px;font-size:12px;color:#868e96">⭐ ${data.rating ?? '-'}${reviews}</p>`,
+    );
+  }
+
+  lines.push(
+    linkParagraph(
+      url,
+      '<b style="color:#e64980">🛒 쿠팡에서 보기</b>',
+      'margin:8px 0 0;font-size:14px',
+    ),
+  );
+
+  // 파트너스 고지는 카드마다 반복하지 않는다 — 템플릿 상단 disclosure가 1회 고지하고,
+  // 실측 발행물에서는 카드 3장 때문에 같은 문구가 4번 노출됐다.
+  return `<div style="${CARD_WRAP_STYLE}">${lines.join('')}</div>`;
 }
 
 /** 이벤트/프로모션 미리보기 카드 HTML(순수, 인라인 스타일) — 유닛 테스트 대상. */
@@ -227,12 +289,36 @@ export function buildEventPreviewCard(
   fallbackText?: string,
 ): string {
   const title = escapeHtml(data.title || fallbackText || '쿠팡 이벤트 · 프로모션');
-  const img = data.imageUrl
-    ? `<img src="${escapeHtml(data.imageUrl)}" alt="${title}" style="max-width:100%;width:100%;border-radius:8px 8px 0 0;display:block" />`
-    : '';
-  return `<div style="max-width:640px;margin:24px auto;border:1px solid #ffd8a8;border-radius:12px;background:#fff4e6;box-shadow:0 3px 12px rgba(232,89,12,.12);overflow:hidden;text-align:center"><a href="${escapeHtml(
-    url,
-  )}" target="_blank" rel="nofollow sponsored" style="text-decoration:none;color:inherit">${img}<div style="padding:16px 18px"><span style="display:inline-block;background:#e8590c;color:#fff;font-size:11px;font-weight:700;padding:3px 10px;border-radius:12px">EVENT</span><div style="font-size:15px;font-weight:700;color:#212529;margin-top:8px;line-height:1.5">🎉 ${title}</div><span style="display:inline-block;background:linear-gradient(135deg,#e8590c,#f76707);color:#fff;font-size:13px;font-weight:700;padding:8px 22px;border-radius:20px;margin-top:10px">이벤트 확인하기</span></div></a></div>`;
+  const lines: string[] = [];
+
+  if (data.imageUrl) {
+    lines.push(
+      imageLinkBlock(
+        url,
+        data.imageUrl,
+        title,
+        'max-width:100%;width:100%;height:auto;border-radius:8px',
+      ),
+    );
+  }
+
+  lines.push(
+    `<p style="margin:0 0 6px;font-size:11px;font-weight:700;color:#e8590c">EVENT</p>`,
+    linkParagraph(
+      url,
+      `<b style="font-size:15px;color:#212529">🎉 ${title}</b>`,
+      'margin:0 0 6px;line-height:1.5',
+    ),
+    linkParagraph(
+      url,
+      '<b style="color:#e8590c">이벤트 확인하기</b>',
+      'margin:8px 0 0;font-size:14px',
+    ),
+  );
+
+  return `<div style="max-width:640px;margin:24px auto;padding:14px 16px;border:1px solid #ffd8a8;border-radius:12px;background:#fff4e6;text-align:center">${lines.join(
+    '',
+  )}</div>`;
 }
 
 /**
@@ -258,21 +344,34 @@ export async function fetchLinkPreviewCards(
       const props = JSON.parse(decodeURIComponent($(el).attr('data-widget-props') || '')) as {
         url?: string;
         text?: string;
+        imageUrl?: string;
       };
-      url = props.url ?? '';
-      if (!url) continue;
+      // URL 칸에 파트너스 배너 스니펫이 들어와도 href/이미지/alt를 회수해 쓴다
+      // (정규화 실패 = 발행 불가 링크 → expandCoupangWidgets가 drop으로 기록한다).
+      const link = normalizeLinkWidgetProps(kind, props);
+      if (!link) continue;
+      url = link.url;
       const data = await fetchWidgetPreviewData(url, adapter, fetcher);
-      if (data.source === 'none') {
+      // 배너 스니펫의 이미지는 원격 조회가 실패해도 쓸 수 있는 확실한 소재다.
+      const withBannerImage: WidgetPreviewData =
+        link.imageUrl && !data.imageUrl
+          ? {
+              ...data,
+              imageUrl: link.imageUrl,
+              source: data.source === 'none' ? 'og' : data.source,
+            }
+          : data;
+      if (withBannerImage.source === 'none') {
         // 이벤트 링크는 데이터 수집에 실패해도 기본 타이틀의 스타일 카드로
         // 발행한다(단순 텍스트 링크보다 눈에 띈다). 상품 링크는 텍스트 링크 폴백.
         if (kind !== 'event-link') continue;
-        cards.set(i, buildEventPreviewCard(url, { source: 'none' }, props.text));
+        cards.set(i, buildEventPreviewCard(url, { source: 'none' }, link.text));
         continue;
       }
       const card =
         kind === 'event-link'
-          ? buildEventPreviewCard(url, data, props.text)
-          : buildProductPreviewCard(url, data, props.text);
+          ? buildEventPreviewCard(url, withBannerImage, link.text)
+          : buildProductPreviewCard(url, withBannerImage, link.text);
       cards.set(i, card);
     } catch (error) {
       logger.warn({ url, error: String(error) }, 'Link preview card build failed');

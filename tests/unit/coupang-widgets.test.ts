@@ -3,6 +3,7 @@ import {
   COUPANG_WIDGET_KINDS,
   expandCoupangWidgets,
   expandCoupangWidgetsReport,
+  normalizeLinkWidgetProps,
   parsePartnersCoupangScript,
 } from '../../src/content/CoupangWidgets';
 
@@ -362,7 +363,9 @@ describe('expandCoupangWidgetsReport (#15) — 위젯 유실 리포트', () => {
   it('props 누락 마커는 dropped에 사유와 함께 기록된다', () => {
     const html = marker('product-link', { text: '링크' });
     const report = expandCoupangWidgetsReport(html);
-    expect(report.dropped).toEqual([{ kind: 'product-link', reason: 'url prop missing' }]);
+    expect(report.dropped).toEqual([
+      { kind: 'product-link', reason: 'url prop missing or not a publishable http(s) link' },
+    ]);
     expect(report.expanded).toBe(0);
   });
 
@@ -387,5 +390,67 @@ describe('expandCoupangWidgetsReport (#15) — 위젯 유실 리포트', () => {
   it('알 수 없는 kind도 기록한다', () => {
     const report = expandCoupangWidgetsReport(marker('alien-widget', {}));
     expect(report.dropped).toEqual([{ kind: 'alien-widget', reason: 'unknown widget kind' }]);
+  });
+});
+
+describe('normalizeLinkWidgetProps — URL 칸 입력 정규화 (logNo 224404059950)', () => {
+  const BANNER =
+    '<a href="https://link.coupang.com/a/gQTJxrccNM" target="_blank" referrerpolicy="unsafe-url">' +
+    '<img src="https://img4a.coupangcdn.com/image/affiliate/banner/14fa.jpg" ' +
+    'alt="[백화점 정품] Guess 게스 여성 롱 와이드 데님 청바지" width="120" height="240"></a>';
+
+  it('평범한 URL은 그대로 두고 기본 라벨을 채운다', () => {
+    expect(
+      normalizeLinkWidgetProps('product-link', { url: 'https://link.coupang.com/a/p1' }),
+    ).toEqual({ url: 'https://link.coupang.com/a/p1', text: '상품 보기' });
+  });
+
+  it('배너 스니펫이면 href/이미지/상품명을 회수한다', () => {
+    // 에디터가 자동으로 넣은 기본 라벨('상품 보기')은 배너 alt(실제 상품명)로 대체한다.
+    expect(normalizeLinkWidgetProps('product-link', { url: BANNER, text: '상품 보기' })).toEqual({
+      url: 'https://link.coupang.com/a/gQTJxrccNM',
+      text: '[백화점 정품] Guess 게스 여성 롱 와이드 데님 청바지',
+      imageUrl: 'https://img4a.coupangcdn.com/image/affiliate/banner/14fa.jpg',
+    });
+  });
+
+  it('사용자가 직접 쓴 텍스트는 배너 alt보다 우선한다', () => {
+    expect(
+      normalizeLinkWidgetProps('product-link', { url: BANNER, text: '내가 쓴 문구' })?.text,
+    ).toBe('내가 쓴 문구');
+  });
+
+  it('발행 후 살아남지 못하는 URL은 null (죽은 평문을 남기지 않는다)', () => {
+    expect(normalizeLinkWidgetProps('product-link', { url: '#' })).toBeNull();
+    expect(normalizeLinkWidgetProps('product-link', { url: '/relative/path' })).toBeNull();
+    expect(normalizeLinkWidgetProps('product-link', {})).toBeNull();
+  });
+});
+
+describe('expandCoupangWidgets — URL 칸에 배너 스니펫이 들어온 마커 (logNo 224404059950)', () => {
+  const BANNER =
+    '<a href="https://link.coupang.com/a/gQTJxrccNM"><img src="https://img4a.coupangcdn.com/b.jpg" ' +
+    'alt="Guess 게스 여성 롱 와이드 데님 청바지"></a>';
+
+  it('죽은 평문 대신 이미지 링크로 발행한다', () => {
+    const html = expandCoupangWidgets(marker('product-link', { url: BANNER, text: '상품 보기' }), {
+      platform: 'naver',
+    });
+    expect(html).toContain('href="https://link.coupang.com/a/gQTJxrccNM"');
+    expect(html).toContain('src="https://img4a.coupangcdn.com/b.jpg"');
+    expect(html).toContain('alt="Guess 게스 여성 롱 와이드 데님 청바지"');
+    // 스니펫 문자열이 href 값으로 새어 들어가지 않는다.
+    expect(html).not.toContain('href="<a');
+  });
+
+  it('http(s)가 아닌 URL 마커는 사유와 함께 제거된다', () => {
+    const report = expandCoupangWidgetsReport(marker('product-link', { url: '#', text: '보기' }), {
+      platform: 'naver',
+    });
+    expect(report.expanded).toBe(0);
+    expect(report.dropped).toEqual([
+      { kind: 'product-link', reason: 'url prop missing or not a publishable http(s) link' },
+    ]);
+    expect(report.html).not.toContain('보기');
   });
 });

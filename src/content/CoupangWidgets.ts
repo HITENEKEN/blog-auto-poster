@@ -1,5 +1,7 @@
 import * as cheerio from 'cheerio';
 import { getLogger } from '@core/logger';
+import { isSurvivableHref } from './NaverHtml';
+import { isPublishableImageUrl, parseLinkInput } from './linkInput';
 
 const logger = getLogger('coupang-widgets');
 
@@ -67,7 +69,68 @@ const DEFAULT_LINK_TEXT: Record<string, string> = {
   'event-link': '이벤트 확인하기',
 };
 
+/**
+ * 에디터가 비어 있는 text 칸에 자동으로 넣는 기본 라벨. 사용자가 의도해서 쓴
+ * 제목과 구분해, 배너 alt(실제 상품명)로 대체해도 되는지 판정하는 데 쓴다.
+ */
+const GENERIC_LINK_LABELS = new Set(Object.values(DEFAULT_LINK_TEXT));
+
 const NAVER_PLATFORM = 'naver';
+
+/** 정규화된 링크 위젯 속성 — url은 발행 후에도 살아남는 http(s) 링크임이 보장된다. */
+export interface NormalizedLinkProps {
+  url: string;
+  /** 링크 텍스트 (기본 라벨 또는 배너 alt에서 복원) */
+  text: string;
+  /** 배너 스니펫에서 회수한 이미지 URL — 있으면 이미지 링크로 발행한다 */
+  imageUrl?: string;
+}
+
+/**
+ * 링크 위젯(product-link/event-link)의 props를 발행 가능한 형태로 정규화한다.
+ * 순수 함수 — 유닛 테스트 대상.
+ *
+ * 배경(2026-09-07 실발행물 logNo 224404059950): 사용자가 URL 칸에 쿠팡 파트너스
+ * **이미지 배너 스니펫**(`<a href="https://link.coupang.com/a/…"><img …></a>`)을
+ * 통째로 붙여넣었다. 어느 단계에서도 검증하지 않아 `<a href="<a href=…">`라는
+ * 앵커가 만들어졌고, prepareNaverHtml이 http가 아닌 href를 벗겨 발행물에는
+ * 링크 없는 평문 "상품 보기"만 남았다.
+ *
+ * 스니펫 자체는 script 없는 `<a><img>`라 네이버에서 잘 살아남는 형태이므로
+ * 버리지 않고 href/이미지/alt를 뽑아 이미지 링크로 되살린다.
+ *
+ * - url이 HTML(`<a`/`<img` 포함)이면 첫 앵커의 href, 첫 이미지의 src/alt을 쓴다.
+ * - href가 없으면 텍스트에서 첫 http(s) URL을 찾는다(마지막 시도).
+ * - text는 사용자가 명시한 값 우선, 기본 라벨뿐이면 배너 alt로 대체한다.
+ * - 최종 url이 발행 후 살아남지 못하면(`isSurvivableHref` 실패) null —
+ *   호출부가 drop으로 기록한다(죽은 평문을 발행물에 남기지 않는다).
+ */
+export function normalizeLinkWidgetProps(
+  kind: string,
+  props: CoupangWidgetProps,
+): NormalizedLinkProps | null {
+  const parsed = parseLinkInput(props.url ?? '');
+  if (!parsed.url) return null;
+
+  const url = parsed.url;
+  const altText = parsed.altText;
+  let imageUrl = (props.imageUrl ?? '').trim() || parsed.imageUrl;
+
+  if (!isSurvivableHref(url)) return null;
+  // 이미지가 http(s)가 아니면 발행물에서 깨진다 — 이미지 없이 텍스트 링크로 간다.
+  if (imageUrl && !isPublishableImageUrl(imageUrl)) imageUrl = '';
+
+  const explicit = (props.text ?? '').trim();
+  const isGenericLabel = GENERIC_LINK_LABELS.has(explicit);
+  const text =
+    (explicit && !isGenericLabel ? explicit : '') ||
+    altText ||
+    explicit ||
+    DEFAULT_LINK_TEXT[kind] ||
+    '상품 보기';
+
+  return imageUrl ? { url, text, imageUrl } : { url, text };
+}
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
@@ -187,9 +250,11 @@ function convertSnippetForNaver(snippet: string): string | null {
 /**
  * Expand `data-coupang-widget` marker elements into real HTML.
  *
- * - product-link / event-link: props.url →
- *   `<a href="{url}" target="_blank" rel="nofollow sponsored">{text}</a>`
+ * - product-link / event-link: `normalizeLinkWidgetProps`로 props를 정규화한 뒤
+ *   `<a href="{url}" target="_blank" rel="nofollow sponsored">{text}</a>`.
  *   text가 비어 있으면 유실 방지를 위해 기본 라벨로 발행한다(이슈 #10).
+ *   URL 칸에 파트너스 배너 스니펫이 들어온 경우엔 href/이미지/alt를 회수해
+ *   이미지 링크로 발행하고, 발행 후 살아남지 못하는 URL이면 drop에 기록한다.
  * - dynamic-banner / search-widget / category-banner: options.widgetCards에 사전
  *   수집한 실제 상품 카드가 있으면 그것을 발행한다(이슈 #20 T3). 카드가 없으면
  *   props.snippet을 사용하되, platform이 'naver'면 script/iframe을 걷어낸다 —
@@ -255,33 +320,55 @@ function expandMarkers(
     }
 
     if (kind === 'product-link' || kind === 'event-link') {
+      // URL 칸에 파트너스 배너 스니펫이 들어온 경우까지 살려낸다(logNo 224404059950).
+      const link = normalizeLinkWidgetProps(kind, props);
+      if (!link) {
+        logger.warn(
+          { kind, url: (props.url ?? '').slice(0, 120) },
+          'Coupang link widget dropped: no publishable http(s) url',
+        );
+        dropped.push({ kind, reason: 'url prop missing or not a publishable http(s) link' });
+        $(el).remove();
+        return;
+      }
+
       // 미리보기 카드가 사전 수집되어 있으면 단순 링크 대신 광고 카드로 발행한다(이슈 #12).
       const card = options.previewCards?.get(index);
-      if (props.url && card) {
+      if (card) {
         $(el).replaceWith(card);
         expandedCount.value += 1;
         return;
       }
-      if (props.url) {
+
+      const anchor = $('<a></a>')
+        .attr('href', link.url)
+        .attr('target', '_blank')
+        .attr('rel', 'nofollow sponsored');
+      if (link.imageUrl) {
+        // 배너 스니펫에서 회수한 이미지 — SE가 이미지 링크로 보존한다(실측 확인).
+        anchor.append($('<img></img>').attr('src', link.imageUrl).attr('alt', link.text));
+        $(el).replaceWith(
+          options.platform
+            ? $('<div style="margin:24px 0;text-align:center"></div>').append(anchor)
+            : anchor,
+        );
+      } else {
         // text가 비어 있어도 삭제하지 않고 기본 라벨로 발행한다(이슈 #10 —
         // URL만 입력한 위젯이 발행물에서 조용히 사라지는 원인).
-        const text = (props.text ?? '').trim() || DEFAULT_LINK_TEXT[kind] || '상품 보기';
-        const anchor = $('<a></a>')
-          .attr('href', props.url)
-          .attr('target', '_blank')
-          .attr('rel', 'nofollow sponsored')
-          .text(text);
+        anchor.text(link.text);
         $(el).replaceWith(anchor);
-        expandedCount.value += 1;
-      } else {
-        logger.warn({ kind }, 'Coupang link widget dropped: url prop missing');
-        dropped.push({ kind, reason: 'url prop missing' });
-        $(el).remove();
       }
+      expandedCount.value += 1;
       return;
     }
 
     if (kind === 'ad-banner') {
+      if (props.url && !isSurvivableHref(props.url.trim())) {
+        logger.warn({ kind }, 'Coupang ad-banner widget dropped: url is not a publishable link');
+        dropped.push({ kind, reason: 'url is not a publishable http(s) link' });
+        $(el).remove();
+        return;
+      }
       if (props.url && props.imageUrl) {
         const anchor = $('<a></a>')
           .attr('href', props.url)

@@ -1,6 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import {
+  detectDuplicatedPaste,
   extractNaverPostId,
+  isEditorEmpty,
+  isPasteCatastrophic,
   filterExistingImagePaths,
   findRecentlyPublishedRssItem,
   parseNaverRss,
@@ -10,6 +13,7 @@ import {
   verifyPastedContentIntegrity,
   rewriteLocalImageSrcs,
 } from '../../src/platforms/naver/NaverBrowserPoster';
+import type { PasteIntegrity } from '../../src/platforms/naver/NaverBrowserPoster';
 
 describe('shouldUseBrowserMode', () => {
   it('returns true when useBrowser is explicitly set, even with a token', () => {
@@ -377,5 +381,102 @@ describe('rewriteLocalImageSrcs (이슈 #20 T1) — 업로드 URL을 본문 제�
 
   it('빈 문자열은 그대로 반환한다', () => {
     expect(rewriteLocalImageSrcs('', new Map())).toEqual({ html: '', unresolved: [] });
+  });
+});
+
+describe('verifyPastedContentIntegrity — 단계별 링크 마크업 (2026-09-08 실측)', () => {
+  // 같은 링크가 단계마다 다른 태그로 표현된다. 하나라도 놓치면 무결성 검증이
+  // 위양성을 내고, 그 오판이 재붙여넣기 → 본문 2배/빈 본문으로 이어졌다.
+  const source = '<p><a href="https://link.coupang.com/a/x">쿠팡에서 보기</a></p>';
+
+  it('postwrite 에디터의 <span data-href>를 링크로 센다', () => {
+    // 실측: 에디터 캔버스에는 <a>가 아예 없고 링크는 이 스팬으로만 존재한다.
+    const pasted =
+      '<p><span class="se-ff-nanumgothic se-link __se-node" data-href="https://link.coupang.com/a/x">쿠팡에서 보기</span></p>';
+    const result = verifyPastedContentIntegrity(source, pasted);
+    expect(result.links).toEqual({ expected: 1, found: 1 });
+    expect(result.ok).toBe(true);
+  });
+
+  it('발행물의 <a href> 텍스트 링크를 센다', () => {
+    const published =
+      '<p><a href="https://link.coupang.com/a/x" class="se-link" data-linkdata="{}">쿠팡에서 보기</a></p>';
+    expect(verifyPastedContentIntegrity(source, published).links).toEqual({
+      expected: 1,
+      found: 1,
+    });
+  });
+
+  it('이미지만 감싼 앵커는 링크가 아니라 이미지로 검증한다', () => {
+    // SE는 이미지 링크를 이미지 모듈로 흡수하거나(발행물) 표 컴포넌트에서 버린다.
+    // 텍스트 링크와 같은 잣대로 세면 정상 발행도 항상 미달로 판정된다.
+    const imageAnchor = '<a href="https://link.coupang.com/a/x"><img src="https://cdn/a.jpg"></a>';
+    const result = verifyPastedContentIntegrity(imageAnchor, '<img src="https://cdn/a.jpg">');
+    expect(result.links).toEqual({ expected: 0, found: 0 });
+    expect(result.images).toEqual({ expected: 1, found: 1 });
+    expect(result.ok).toBe(true);
+  });
+
+  it('링크 없는 이미지에 SE가 붙이는 앵커는 세지 않는다', () => {
+    const pasted =
+      '<a href="#" class="se-module-image-link __se_link" ' +
+      'data-linkdata="{&quot;link&quot; : &quot;&quot;}"><img src="https://blogfiles.pstatic.net/a.png"></a>';
+    expect(verifyPastedContentIntegrity('<p>본문</p>', pasted).links.found).toBe(0);
+  });
+});
+
+describe('detectDuplicatedPaste — 본문 중복 삽입 판정 (logNo 224404059950)', () => {
+  const body = `<p>${'가'.repeat(400)}</p>`;
+
+  it('붙여넣은 본문이 원본의 2배면 중복으로 본다', () => {
+    expect(detectDuplicatedPaste(body, body + body)).toBe(true);
+  });
+
+  it('정상 붙여넣기는 중복이 아니다', () => {
+    expect(detectDuplicatedPaste(body, body)).toBe(false);
+    // SE가 태그를 바꿔 감싸도 텍스트 길이는 그대로다.
+    expect(detectDuplicatedPaste(body, `<div><span>${'가'.repeat(400)}</span></div>`)).toBe(false);
+  });
+
+  it('짧은 본문은 비율 오차가 커서 판정하지 않는다', () => {
+    expect(detectDuplicatedPaste('<p>짧은 글</p>', '<p>짧은 글</p><p>짧은 글</p>')).toBe(false);
+  });
+});
+
+describe('isPasteCatastrophic — 재시도를 정당화하는 실패 (2026-09-08 검증 발행)', () => {
+  const body = `<p>${'가'.repeat(400)}</p>`;
+  const integrity = (imagesExpected: number, imagesFound: number): PasteIntegrity => ({
+    links: { expected: 3, found: 0 },
+    images: { expected: imagesExpected, found: imagesFound },
+    ok: false,
+  });
+
+  it('링크 개수만 안 맞으면 재시도하지 않는다 (본문을 지울 이유가 못 된다)', () => {
+    // 링크 집계 규칙이 어긋난 정도로 본문을 지우고 다시 붙이다가 에디터가
+    // 통째로 비어 발행이 실패했다 — 그 경로를 막는다.
+    expect(isPasteCatastrophic(body, body, integrity(7, 7))).toBe(false);
+  });
+
+  it('본문 텍스트가 절반도 안 들어갔으면 재시도한다', () => {
+    expect(isPasteCatastrophic(body, `<p>${'가'.repeat(100)}</p>`, integrity(7, 7))).toBe(true);
+  });
+
+  it('이미지가 통째로 빠졌으면 재시도한다', () => {
+    expect(isPasteCatastrophic(body, body, integrity(7, 0))).toBe(true);
+  });
+});
+
+describe('isEditorEmpty — 콘텐츠 모듈 기준 비어있음 판정', () => {
+  it('이미지도 텍스트도 없으면 비었다(빈 문단 모듈은 허용)', () => {
+    expect(isEditorEmpty({ components: 1, images: 0, textLength: 0 })).toBe(true);
+  });
+
+  it('텍스트나 이미지가 남아 있으면 비지 않았다', () => {
+    expect(isEditorEmpty({ components: 3, images: 0, textLength: 120 })).toBe(false);
+    expect(isEditorEmpty({ components: 3, images: 2, textLength: 0 })).toBe(false);
+  });
+
+  it('신호를 못 읽었으면 "비었다"고 단정하지 않는다', () => {
+    expect(isEditorEmpty(null)).toBe(false);
   });
 });

@@ -61,6 +61,12 @@ platforms:
     clientId: '' # Set via environment variable BLOG_POSTER_PLATFORM_NAVER_CLIENTID
     clientSecret: '' # Set via environment variable BLOG_POSTER_PLATFORM_NAVER_CLIENTSECRET
     accessToken: '' # Set via environment variable BLOG_POSTER_PLATFORM_NAVER_ACCESSTOKEN (Naver Login OAuth token, blog-write scope)
+    # 쿠팡 CDN 등 외부 이미지를 네이버에 업로드해 blogfiles.pstatic.net 으로 바꿔 발행한다.
+    # true(기본): 광고 차단기/DNS 필터 환경에서도 상품 이미지가 깨지지 않는다.
+    #   같은 이미지는 data/naver-remote-images.json 캐시로 최초 1회만 업로드된다.
+    # false: 외부 주소를 그대로 핫링크한다(블로그 저장 용량을 쓰지 않지만,
+    #   차단 환경에서 네이버가 "존재하지 않는 이미지입니다."를 대신 표시한다).
+    rehostRemoteImages: true
     rateLimit:
       requestsPerMinute: 30
 

@@ -195,6 +195,10 @@ export class NaverAdapter implements PlatformAdapter {
           visibility: content.visibility === 'private' ? 'private' : 'public',
           headless: true,
           images: imagePaths,
+          // 외부 이미지(쿠팡 CDN)를 네이버로 옮겨 발행할지. 기본 true —
+          // 핫링크는 광고 차단 환경에서 "존재하지 않는 이미지입니다."가 된다.
+          // 같은 이미지는 캐시로 한 번만 업로드되므로 저장 용량이 글마다 쌓이지 않는다.
+          rehostRemoteImages: cfg.rehostRemoteImages !== false,
         });
         // 이미지 업로드 실패 경고 전파(이슈 #19) — 발행 자체는 성공
         return result.warnings && result.warnings.length > 0

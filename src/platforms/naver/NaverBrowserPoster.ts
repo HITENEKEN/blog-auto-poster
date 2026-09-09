@@ -1,9 +1,19 @@
 import * as fs from 'fs';
+import * as os from 'os';
 import * as path from 'path';
 import { setTimeout as delay } from 'timers/promises';
 import { chromium, type Frame, type Locator, type Page } from 'playwright';
 import { ConfigurationError, PlatformError } from '@core/errors';
 import { getLogger } from '@core/logger';
+import { collectPublishedPostFailures } from './PublishedPostInspector';
+import {
+  collectRemoteImageUrls,
+  downloadRemoteImages,
+  loadRemoteImageCache,
+  pickReusableCachedImages,
+  rememberRemoteImages,
+  replaceImageSrcs,
+} from './RemoteImages';
 
 const logger = getLogger('naver-browser-poster');
 
@@ -243,7 +253,9 @@ interface BufferFrameGlobals {
   };
 }
 
-const OVERALL_TIMEOUT_MS = 180_000;
+// 외부 이미지(쿠팡 상품 카드 등)도 네이버에 업로드하므로 업로드 횟수가 늘었다.
+// 업로드 1장당 수 초가 들어 기존 180초로는 이미지가 많은 글에서 빠듯하다.
+const OVERALL_TIMEOUT_MS = 300_000;
 const DEBUG_DIR = 'output/naver-debug';
 const DEBUG_SCREENSHOTS_TO_KEEP = 5;
 
@@ -254,27 +266,162 @@ interface EditorContainerGlobals {
   };
 }
 
+/** 에디터 본문 컨테이너 후보 — 앞에서부터 먼저 맞는 것을 쓴다. */
+const EDITOR_CONTENT_SELECTORS = [
+  '.se-main-container',
+  '.se-viewer .se-main-container',
+  '.se-container .se-canvas',
+];
+
+/** 에디터 본문 읽기 결과 — 어떤 프레임/셀렉터로 읽었는지까지 남긴다(진단용). */
+interface EditorContent {
+  html: string;
+  frame: string;
+  selector: string;
+}
+
 /**
- * 에디터 본문(`.se-main-container`)에 실제 반영된 HTML을 읽는다(이슈 #20 T1).
+ * 에디터 본문에 실제 반영된 HTML을 읽는다(이슈 #20 T1, 2026-09-08 재작성).
  *
- * 기존 `readLargestFrameBodyHtml`은 모든 프레임의 `body.innerHTML` 중 가장 큰
- * 문서를 골랐다. 그런데 postwrite 페이지에는 본문 밖 장식(툴바·설정 레이어·
- * input_buffer)도 함께 잡혀, 무결성 검증이 "본문에 없는 요소"까지 세거나
- * 본문 요소 수를 과대계산해 오판을 만들었다. 그래서 에디터 본문 컨테이너만
- * 읽는다 — 발행물에 직렬화되는 바로 그 영역이다.
+ * 발행물에 직렬화되는 바로 그 영역(`.se-main-container`)만 읽는다 — postwrite
+ * 페이지의 툴바·설정 레이어·input_buffer까지 세면 무결성 검증이 오판한다.
+ *
+ * 2026-09-07 실발행물(logNo 224404059950)에서 이 함수가 빈 문자열을 돌려줘
+ * `links 0/4, images 0/6`으로 판정됐고, 그 오판이 재붙여넣기를 불러 본문이
+ * 2배로 발행됐다. 그래서 두 가지를 고친다:
+ *
+ *  - `findEditorFrame`이 이미 찾아둔 editor 프레임을 **먼저** 시도한다.
+ *  - 반환 타입을 `EditorContent | null`로 바꿔 **"못 읽음(null)"과 "본문이 비었음('')"**
+ *    을 구분한다. 못 읽은 것을 "비었다"로 오해하는 순간 파괴적 재시도가 시작된다.
  */
-async function readEditorContentHtml(page: Page): Promise<string> {
-  for (const frame of page.frames()) {
-    const html = await frame
-      .evaluate(() => {
+async function readEditorContentHtml(page: Page, editor?: Frame): Promise<EditorContent | null> {
+  const frames = editor ? [editor, ...page.frames().filter((f) => f !== editor)] : page.frames();
+  for (const frame of frames) {
+    const found = await frame
+      .evaluate((selectors: string[]) => {
         const g = globalThis as unknown as EditorContainerGlobals;
-        const container = g.document?.querySelector?.('.se-main-container');
-        return container?.innerHTML ?? '';
-      })
-      .catch(() => '');
-    if (html) return html;
+        for (const selector of selectors) {
+          const container = g.document?.querySelector?.(selector);
+          if (container && typeof container.innerHTML === 'string') {
+            return { html: container.innerHTML, selector };
+          }
+        }
+        return null;
+      }, EDITOR_CONTENT_SELECTORS)
+      .catch(() => null);
+    if (found) {
+      return { html: found.html, frame: frame.name() || frame.url(), selector: found.selector };
+    }
   }
-  return '';
+  return null;
+}
+
+/** `.se-component` 신호 읽기용 named shim(서버 tsconfig에 DOM lib가 없음) */
+interface EditorSignalNode {
+  textContent?: string | null;
+  querySelectorAll(selector: string): ArrayLike<{ remove(): void }>;
+  cloneNode(deep: boolean): EditorSignalNode;
+}
+
+interface EditorSignalGlobals {
+  document?: {
+    querySelectorAll?(selector: string): ArrayLike<EditorSignalNode>;
+  };
+}
+
+/** 에디터 본문에 "내용이 있는지"를 판정하는 신호. */
+export interface EditorContentSignals {
+  /** 본문 컴포넌트(.se-component) 수 */
+  components: number;
+  /** 컴포넌트 안의 이미지 수 */
+  images: number;
+  /** 컴포넌트 안의 텍스트 길이(공백 정규화) */
+  textLength: number;
+}
+
+/**
+ * 에디터 본문이 비었는지 **콘텐츠 모듈 기준**으로 읽는다.
+ *
+ * 2026-09-08 실측: postwrite 에디터에는 `.se-main-container`가 없고 캔버스는
+ * `.se-container .se-canvas`다. 그런데 캔버스에는 본문 외에 에디터 장식
+ * (`se-content-guide`, `se-selection`, 캐럿 svg)이 항상 들어 있어, 캔버스
+ * innerHTML로 "비었나"를 판정하면 **항상 '안 비었다'**가 나온다. 그 오판이
+ * "비우고 재시도" 경로에서 본문을 지운 뒤 재붙여넣기를 건너뛰게 만들어
+ * 에디터를 통째로 비웠다. 그래서 `.se-component`(실제 콘텐츠 모듈)만 본다.
+ */
+async function readEditorContentSignals(
+  page: Page,
+  editor?: Frame,
+): Promise<EditorContentSignals | null> {
+  const frames = editor ? [editor, ...page.frames().filter((f) => f !== editor)] : page.frames();
+  for (const frame of frames) {
+    const signals = await frame
+      .evaluate(() => {
+        const g = globalThis as unknown as EditorSignalGlobals;
+        // 제목도 `.se-component`다(실측 class: "se-component se-documentTitle …").
+        // 재시도 경로의 clear는 제목 입력 **뒤**에 돌기 때문에, 제목을 포함해서
+        // 세면 본문이 비었는데도 "안 비었다"로 판정된다.
+        const nodes = g.document?.querySelectorAll?.('.se-component:not([class*="documentTitle"])');
+        if (!nodes || nodes.length === 0) return null;
+        let images = 0;
+        let text = '';
+        for (let i = 0; i < nodes.length; i += 1) {
+          // 빈 에디터의 안내문("글감과 함께 …")도 textContent에 잡히므로 떼고 센다.
+          const clone = nodes[i].cloneNode(true);
+          const placeholders = clone.querySelectorAll('[class*="placeholder"]');
+          for (let j = 0; j < placeholders.length; j += 1) placeholders[j].remove();
+          images += clone.querySelectorAll('img').length;
+          text += clone.textContent ?? '';
+        }
+        return {
+          components: nodes.length,
+          images,
+          textLength: text.replace(/\s+/g, ' ').trim().length,
+        };
+      })
+      .catch(() => null);
+    if (signals) return signals;
+  }
+  return null;
+}
+
+/** 본문이 비었는지 — 이미지도 텍스트도 없으면 비어 있다(빈 문단은 허용). */
+export function isEditorEmpty(signals: EditorContentSignals | null): boolean {
+  if (!signals) return false;
+  return signals.images === 0 && signals.textLength === 0;
+}
+
+/** 붙여넣기 결과가 안정될 때까지의 폴링 간격/최대 대기 */
+const EDITOR_SETTLE_POLL_MS = 500;
+const EDITOR_SETTLE_TIMEOUT_MS = 8_000;
+
+/**
+ * 붙여넣기 직후 본문이 **안정될 때까지** 폴링해서 읽는다.
+ *
+ * 기존에는 고정 800ms 뒤 한 번만 읽었다. SE는 붙여넣은 원격 이미지를 비동기로
+ * 모듈화하므로(실측: 원격 이미지 3장), 그 전에 읽으면 요소 수가 모자라 보이고
+ * 무결성 오판 → 재붙여넣기 → 본문 2배로 이어진다.
+ *
+ * 길이가 2회 연속 같으면 안정으로 보고 확정한다. 모든 읽기가 실패하면 null.
+ */
+async function readSettledEditorHtml(page: Page, editor?: Frame): Promise<EditorContent | null> {
+  const deadline = Date.now() + EDITOR_SETTLE_TIMEOUT_MS;
+  let last: EditorContent | null = null;
+  let stableRounds = 0;
+  for (;;) {
+    await page.waitForTimeout(EDITOR_SETTLE_POLL_MS);
+    const current = await readEditorContentHtml(page, editor);
+    if (current) {
+      if (last && current.html.length === last.html.length) {
+        stableRounds += 1;
+        if (stableRounds >= 2) return current;
+      } else {
+        stableRounds = 0;
+      }
+      last = current;
+    }
+    if (Date.now() >= deadline) return last;
+  }
 }
 
 /**
@@ -685,15 +832,18 @@ async function clearEditorBody(page: Page, editor: Frame | undefined): Promise<b
   await page.keyboard.press('Backspace').catch(() => {});
   await page.waitForTimeout(500);
 
-  const left = await readEditorContentHtml(page).catch(() => '');
-  // SE가 빈 문단에 `<p><br></p>` 같은 잔여 마크업을 남길 수 있어 텍스트 기준 판정.
-  const text = left
-    .replace(/<[^>]*>/g, '')
-    .replace(/&nbsp;/gi, ' ')
-    .trim();
-  if (text || /<img\b/i.test(left)) {
+  // 판정은 콘텐츠 모듈(.se-component)만 본다 — 캔버스 innerHTML에는 에디터 장식이
+  // 늘 남아 있어 "안 비었다"로 오판하고, 그 오판이 본문을 지운 채 재붙여넣기를
+  // 건너뛰게 만든다(2026-09-08 검증 발행에서 에디터가 통째로 비었다).
+  const signals = await readEditorContentSignals(page, editor).catch(() => null);
+  if (!signals) {
+    // 못 읽은 것을 "비었다"로 오해하면 안 된다.
+    logger.warn('Editor content signals not readable; clear could not be verified');
+    return false;
+  }
+  if (!isEditorEmpty(signals)) {
     logger.warn(
-      { remaining: left.slice(0, 200) },
+      { signals },
       'Editor body still has content after clear; paste result may include leftovers',
     );
     return false;
@@ -804,29 +954,60 @@ export interface PasteIntegrity {
 }
 
 /**
- * 발행 후에도 살아남는 텍스트 하이퍼링크 수를 센다(이슈 #20 원인 E).
+ * 본문 **텍스트 하이퍼링크** 수를 센다(이슈 #20 원인 E, 2026-09-08 실측 재작성).
  *
- * 두 가지 위양성/위음성 원인을 제거한다:
- *  - `<iframe>`은 네이버가 100% 제거한다(실발행물 `iframes: expected 1, found 0`).
- *    iframe을 기대값에 넣으면 정상 발행도 항상 실패로 판정됐고, 그 실패가
- *    파괴적 폴백을 트리거해 올바르게 붙여넣힌 본문을 망가뜨렸다. → 기대하지 않는다.
- *  - SE는 이미지마다 `<a href="#" class="se-module-image-link">`를 감싼다. 이건
- *    본문 텍스트 링크가 아니므로 세지 않는다(링크 수를 부풀려 오판을 만든다).
- *  - href가 `http(s)`로 시작하지 않는 앵커는 SE가 링크를 버린다 → 세지 않는다.
+ * 같은 링크가 단계마다 전혀 다른 마크업으로 표현되므로 셋 다 받아들인다:
+ *  - 붙여넣을 원본:  `<a href="https://…">텍스트</a>`
+ *  - postwrite 에디터: `<span class="se-link __se-node" data-href="https://…">텍스트</span>`
+ *    (에디터에는 `<a>`가 아예 없다 — 실측으로 앵커 0개를 확인했다. 이걸 모르고
+ *    href만 세다가 "링크 0/14"라는 위양성이 나왔고, 그 오판이 재붙여넣기를 불러
+ *    본문을 2배로 발행하거나 통째로 비웠다.)
+ *  - 발행물:        `<a href="https://…" class="se-link" data-linkdata="{…}">텍스트</a>`
+ *
+ * 이미지만 감싼 앵커는 **세지 않는다**. SE는 그런 앵커를 이미지 모듈의 링크로
+ * 흡수하거나(발행물) 아예 버리므로(표 컴포넌트) 텍스트 링크와 같은 잣대로 볼 수
+ * 없다 — 이미지 쪽은 이미지 수로 따로 검증한다.
  */
 function countHttpLinks(html: string): number {
   let count = 0;
-  const tagRe = /<a\b[^>]*>/gi;
+  const anchorRe = /<a\b([^>]*)>([\s\S]*?)<\/a>/gi;
   let match: RegExpExecArray | null;
-  while ((match = tagRe.exec(html)) !== null) {
-    const tag = match[0];
-    const href = (/\shref\s*=\s*["']([^"']*)["']/i.exec(tag)?.[1] ?? '').trim();
-    if (!/^https?:\/\//i.test(href)) continue;
-    const cls = /\sclass\s*=\s*["']([^"']*)["']/i.exec(tag)?.[1] ?? '';
-    if (/se-module-image-link/i.test(cls)) continue;
+  while ((match = anchorRe.exec(html)) !== null) {
+    const [, attrs, inner] = match;
+    const href = (/\shref\s*=\s*["']([^"']*)["']/i.exec(` ${attrs}`)?.[1] ?? '').trim();
+    const hasUrl = /^https?:\/\//i.test(href) || hasSeLinkDataUrl(`<a ${attrs}>`);
+    if (!hasUrl) continue;
+    if (isImageOnly(inner)) continue;
     count += 1;
   }
+  return count + countSeLinkSpans(html);
+}
+
+/** 앵커 내용이 이미지 하나뿐인지 — 이미지 링크는 링크 수가 아니라 이미지 수로 본다. */
+function isImageOnly(inner: string): boolean {
+  return /^\s*<img\b[^>]*\/?>\s*$/i.test(inner);
+}
+
+/** postwrite 에디터의 텍스트 링크(`<span data-href="http…">`) 수. */
+function countSeLinkSpans(html: string): number {
+  let count = 0;
+  const re = /<(?!a[\s>])[a-z][a-z0-9-]*\b[^>]*\sdata-href\s*=\s*["']https?:\/\/[^"']*["'][^>]*>/gi;
+  while (re.exec(html) !== null) count += 1;
   return count;
+}
+
+/** 앵커의 `data-linkdata`가 실제 http(s) 링크를 들고 있는지 (`&quot;` 이스케이프 허용). */
+function hasSeLinkDataUrl(tag: string): boolean {
+  const data = /\sdata-linkdata\s*=\s*(["'])([\s\S]*?)\1/i.exec(tag)?.[2] ?? '';
+  if (!data) return false;
+  return /(?:&quot;|")link(?:&quot;|")\s*:\s*(?:&quot;|")https?:\/\//i.test(data);
+}
+
+/** 무결성 진단용 — 결과 HTML의 링크 캐리어(앵커/`data-href` 스팬) 앞부분을 몇 개만 뽑는다. */
+function sampleAnchorTags(html: string, limit = 3): string[] {
+  const anchors = html.match(/<a\b[^>]*>/gi) ?? [];
+  const spans = html.match(/<[a-z][a-z0-9-]*\b[^>]*\sdata-href\s*=\s*["'][^"']*["'][^>]*>/gi) ?? [];
+  return [...anchors, ...spans].slice(0, limit).map((tag) => tag.slice(0, 220));
 }
 
 /** src를 가진 `<img>` 수를 센다(src 없는 img는 발행물에서 의미가 없다). */
@@ -870,6 +1051,57 @@ export function verifyPastedContentIntegrity(
   return integrity;
 }
 
+/** 붙여넣은 본문이 원본의 몇 배를 넘으면 중복으로 볼지 */
+const DUPLICATE_TEXT_RATIO = 1.8;
+/** 이 길이 미만의 짧은 본문은 비율 판정의 오차가 커서 중복 판정을 하지 않는다 */
+const DUPLICATE_MIN_TEXT_LENGTH = 200;
+
+/** 태그를 걷어낸 본문 텍스트 길이 — 중복 판정용. */
+function visibleTextLength(html: string): number {
+  return (html || '')
+    .replace(/<[^>]*>/g, ' ')
+    .replace(/&nbsp;/gi, ' ')
+    .replace(/\s+/g, ' ')
+    .trim().length;
+}
+
+/**
+ * 붙여넣기가 본문을 **중복 삽입**했는지 판정한다. 순수 함수 — 유닛 테스트 대상.
+ *
+ * 배경(2026-09-07 실발행물 logNo 224404059950): 무결성 검증이 오판해 재붙여넣기를
+ * 했는데, SmartEditor는 기존 본문을 지우지 않고 **덧붙인다**. 그 결과 컴포넌트
+ * 30개짜리 글이 60개(= 정확히 2배)로 발행됐다. 재시도 전후로 이 판정을 걸어
+ * 같은 사고가 조용히 반복되지 않게 한다.
+ */
+export function detectDuplicatedPaste(publishHtml: string, pastedHtml: string): boolean {
+  const expected = visibleTextLength(publishHtml);
+  if (expected < DUPLICATE_MIN_TEXT_LENGTH) return false;
+  return visibleTextLength(pastedHtml) >= expected * DUPLICATE_TEXT_RATIO;
+}
+
+/** 재시도를 정당화하는 "붙여넣기가 사실상 실패했다"의 기준 */
+const CATASTROPHIC_TEXT_RATIO = 0.5;
+
+/**
+ * 붙여넣기가 **사실상 실패**했는지 판정한다. 순수 함수 — 유닛 테스트 대상.
+ *
+ * 재시도는 본문을 지우고 다시 붙이는 위험한 동작이다(2026-09-08 검증 발행에서
+ * 이 경로가 에디터를 통째로 비웠다). 그래서 링크 개수 몇 개가 안 맞는 정도로는
+ * 재시도하지 않는다 — 경고만 남기고 그대로 발행하는 편이 언제나 낫다.
+ * 본문 텍스트가 절반도 안 들어갔거나 이미지가 통째로 빠진 경우에만 재시도한다.
+ */
+export function isPasteCatastrophic(
+  publishHtml: string,
+  pastedHtml: string,
+  integrity: PasteIntegrity,
+): boolean {
+  const expected = visibleTextLength(publishHtml);
+  if (expected > 0 && visibleTextLength(pastedHtml) < expected * CATASTROPHIC_TEXT_RATIO) {
+    return true;
+  }
+  return integrity.images.expected > 0 && integrity.images.found === 0;
+}
+
 export interface NaverBrowserPostOptions {
   blogId: string;
   title: string;
@@ -879,6 +1111,13 @@ export interface NaverBrowserPostOptions {
   headless: boolean;
   /** 본문에 삽입할 이미지 로컬 파일 경로 (#7). 첫 항목이 대표 이미지가 된다. */
   images?: string[];
+  /**
+   * 외부 이미지(쿠팡 CDN 등)를 네이버에 업로드해 `blogfiles.pstatic.net`으로
+   * 바꿔 발행할지. 기본 true — 핫링크로 두면 광고 차단 환경에서 네이버가
+   * "존재하지 않는 이미지입니다."를 대신 넣는다(실측 224405221163).
+   * false면 외부 주소를 그대로 발행한다(블로그 저장 용량을 쓰지 않는다).
+   */
+  rehostRemoteImages?: boolean;
 }
 
 /** 존재하는 로컬 이미지 파일만 필터링한다(순서 유지). 퓨어 헬퍼 — 유닛 테스트 대상. */
@@ -903,6 +1142,36 @@ export interface NaverBrowserPostResult {
   url: string;
   /** 이미지 업로드 실패 등 발행은 됐지만 누락된 요소 경고(이슈 #19) */
   warnings?: string[];
+}
+
+/**
+ * 발행 직후 발행물을 읽어 합격 기준을 점검한다(T6).
+ *
+ * 이미 로그인된 브라우저 컨텍스트에서 읽으므로 **비공개 글도 검사된다**
+ * (익명 PostView.naver 요청은 비공개 글의 본문을 돌려주지 않는다).
+ * 어떤 실패에서도 던지지 않는다 — 발행은 이미 끝났고, 점검은 부가 정보다.
+ */
+async function inspectPublishedPost(
+  context: { pages(): Page[] },
+  postId: string,
+): Promise<string[]> {
+  try {
+    const viewPage = context.pages().find((pg) => extractNaverPostId(pg.url()) === postId);
+    if (!viewPage) return [];
+    await viewPage.waitForLoadState('domcontentloaded', { timeout: 10_000 }).catch(() => {});
+    const published = await readEditorContentHtml(viewPage);
+    if (!published) return [];
+    const failures = collectPublishedPostFailures(published.html);
+    if (failures.length > 0) {
+      logger.warn({ postId, failures }, 'Published post failed the inspection checks');
+    } else {
+      logger.info({ postId }, 'Published post passed the inspection checks');
+    }
+    return failures;
+  } catch (error) {
+    logger.warn({ postId, error: String(error) }, 'Published post inspection skipped');
+    return [];
+  }
 }
 
 /**
@@ -931,6 +1200,8 @@ export async function postToNaverBlog(
   });
 
   let page: Page | undefined;
+  // 외부 이미지를 내려받는 임시 디렉터리 — finally에서 지운다.
+  let remoteImageDir = '';
   try {
     page = context.pages()[0] ?? (await context.newPage());
 
@@ -975,9 +1246,47 @@ export async function postToNaverBlog(
     // 붙여넣으므로 이미지가 섹션 사이 제자리에 들어간다(원인 A: 상단/끝 몰림 해소).
     const urlByPath = new Map<string, string>();
     const publishWarnings: string[] = [];
-    if (filterExistingImagePaths(opts.images).length > 0) {
+
+    // 외부 이미지(쿠팡 CDN 등)를 내려받아 로컬 이미지와 **같은 업로드 경로**에 태운다.
+    // 핫링크로 발행하면 광고 차단기/DNS 필터가 이미지를 막는 순간 네이버가 그 자리에
+    // "존재하지 않는 이미지입니다."를 넣는다(실측: 발행물 224405221163에서 쿠팡 CDN만
+    // 차단하니 정확히 4회 노출). 상품 이미지가 깨지는 건 제휴 글에서 치명적이다.
+    const rehostRemote = opts.rehostRemoteImages !== false;
+    const remoteImageUrls = rehostRemote ? collectRemoteImageUrls(opts.html) : [];
+    const localByRemote = new Map<string, string>();
+    // 이미 올려 둔 이미지는 다시 올리지 않는다 — blogfiles URL은 글을 넘나들며
+    // 재사용할 수 있음을 실측으로 확인했다(세션 없이 200, referer 제한 없음).
+    const reusableFromCache = new Map<string, string>();
+    if (remoteImageUrls.length > 0) {
+      const picked = await pickReusableCachedImages(remoteImageUrls, loadRemoteImageCache()).catch(
+        () => ({ reusable: new Map<string, string>(), missing: remoteImageUrls }),
+      );
+      for (const [url, naverUrl] of picked.reusable) reusableFromCache.set(url, naverUrl);
+
+      if (picked.missing.length > 0) {
+        remoteImageDir = fs.mkdtempSync(path.join(os.tmpdir(), 'naver-remote-img-'));
+        const downloaded = await downloadRemoteImages(picked.missing, remoteImageDir).catch(
+          (error: unknown) => {
+            logger.warn({ error: String(error) }, 'Remote image download failed');
+            return { localByUrl: new Map<string, string>(), failures: [String(error)] };
+          },
+        );
+        for (const [url, file] of downloaded.localByUrl) localByRemote.set(url, file);
+      }
+      logger.info(
+        {
+          found: remoteImageUrls.length,
+          reusedFromCache: reusableFromCache.size,
+          toUpload: localByRemote.size,
+        },
+        'Remote images resolved for Naver publishing',
+      );
+    }
+
+    const uploadTargets = [...(opts.images ?? []), ...localByRemote.values()];
+    if (filterExistingImagePaths(uploadTargets).length > 0) {
       await runStep(page, 'upload-images', async () => {
-        const result = await uploadNaverImages(page!, editor, opts.images ?? []);
+        const result = await uploadNaverImages(page!, editor, uploadTargets);
         for (const [localPath, url] of result.urlByPath) urlByPath.set(localPath, url);
         if (result.errors.length > 0) {
           logger.warn({ errors: result.errors }, 'Some Naver editor images failed to upload');
@@ -1032,7 +1341,30 @@ export async function postToNaverBlog(
     // 이슈 #20 T1: upload-images가 회수한 네이버 URL을 본문의 원래 <img> 자리에 넣어
     // 붙여넣는다. 매핑이 없는 로컬 이미지는 제거하고 unresolved에 기록해 발행물에
     // 로컬 경로/깨진 이미지가 절대 남지 않게 한다(stripLocalImageTags는 이중 안전망).
-    const rewritten = rewriteLocalImageSrcs(opts.html, urlByPath);
+    // 외부 이미지를 네이버가 발급한 URL로 바꾼다. 업로드에 실패한 것은 원래 주소를
+    // 그대로 둔다 — 이미지를 지우는 것보다 핫링크로라도 남기는 편이 낫다.
+    const naverUrlByRemote = new Map<string, string>(reusableFromCache);
+    const freshlyUploaded = new Map<string, string>();
+    for (const [remoteUrl, localPath] of localByRemote) {
+      const naverUrl = urlByPath.get(localPath);
+      if (naverUrl) {
+        naverUrlByRemote.set(remoteUrl, naverUrl);
+        freshlyUploaded.set(remoteUrl, naverUrl);
+      }
+    }
+    // 다음 글부터는 업로드 없이 이 URL을 그대로 쓴다.
+    rememberRemoteImages(freshlyUploaded);
+    const hostedHtml = replaceImageSrcs(opts.html, naverUrlByRemote);
+    const stillRemote = remoteImageUrls.filter((url) => !naverUrlByRemote.has(url));
+    if (stillRemote.length > 0) {
+      logger.warn({ stillRemote }, 'Remote images published as hotlinks (upload failed)');
+      publishWarnings.push(
+        `외부 이미지 ${stillRemote.length}장을 네이버로 옮기지 못해 원래 주소로 발행했다 ` +
+          `(광고 차단 환경에서 "존재하지 않는 이미지입니다"로 보일 수 있다)`,
+      );
+    }
+
+    const rewritten = rewriteLocalImageSrcs(hostedHtml, urlByPath);
     if (rewritten.unresolved.length > 0) {
       logger.warn(
         { unresolved: rewritten.unresolved },
@@ -1073,31 +1405,71 @@ export async function postToNaverBlog(
           // 붙여넣기 무결성 검증(이슈 #15/#20): SmartEditor paste 파이프라인이 링크 등
           // 임베드 요소를 정화해 버리면 광고·링크가 발행물에서 사라진다. 발행물에
           // 직렬화되는 바로 그 영역(.se-main-container)을 읽어 기대 요소 수와 비교한다.
-          const readPasted = async (): Promise<string> => {
-            await page!.waitForTimeout(800);
-            return readEditorContentHtml(page!);
-          };
-          let integrity = verifyPastedContentIntegrity(publishHtml, await readPasted());
-          if (!integrity.ok) {
-            // 이슈 #20 원인 A: 기존에는 여기서 에디터를 비우고 innerHTML를 직접
-            // 주입했다. 그러나 SE ONE은 라이브 DOM이 아니라 내부 모듈 모델을
-            // 직렬화해 발행하므로 DOM 주입은 모델에 반영되지 않고, 오히려
-            // "에디터 비우기"가 올바르게 붙여넣힌 본문을 파괴했다. 그래서 파괴적
-            // 폴백을 폐기하고 붙여넣기를 한 번만 재시도한다.
+          let pasted = await readSettledEditorHtml(page!, editor);
+          if (!pasted) {
+            // 못 읽었다면 **재시도하지 않는다**. 2026-09-07 발행 사고(logNo
+            // 224404059950)는 읽기 실패를 "요소 유실"로 오판해 재붙여넣기를 했고,
+            // SE가 본문을 덧붙여 글이 통째로 2번 발행됐다.
             logger.warn(
-              { integrity },
-              'Paste pipeline dropped embed elements; retrying the paste once (no destructive fallback)',
+              'Editor content not readable after paste; skipping integrity check (no retry)',
             );
-            await pasteHtmlIntoBuffer(buffer, publishHtml);
-            integrity = verifyPastedContentIntegrity(publishHtml, await readPasted());
-          }
-          if (!integrity.ok) {
-            // 그래도 부족하면 본문을 망가뜨리지 않고 그대로 발행하되 경고로 알린다.
-            const detail =
-              `붙여넣기 무결성 부족 — 링크 ${integrity.links.found}/${integrity.links.expected}, ` +
-              `이미지 ${integrity.images.found}/${integrity.images.expected}`;
-            logger.warn({ integrity }, 'Paste still short of expectations; publishing as-is');
-            publishWarnings.push(detail);
+            publishWarnings.push('붙여넣기 결과를 읽지 못해 무결성 검증을 건너뛰었다');
+          } else {
+            logger.info(
+              { frame: pasted.frame, selector: pasted.selector, length: pasted.html.length },
+              'Editor content read for paste integrity check',
+            );
+            let integrity = verifyPastedContentIntegrity(publishHtml, pasted.html);
+            let duplicated = detectDuplicatedPaste(publishHtml, pasted.html);
+
+            // 재시도는 본문을 지우고 다시 붙이는 위험한 동작이므로, 링크 개수가
+            // 조금 안 맞는 정도로는 하지 않는다 — 경고만 남기고 그대로 발행한다.
+            if (duplicated || isPasteCatastrophic(publishHtml, pasted.html, integrity)) {
+              logger.warn(
+                { integrity, duplicated },
+                'Paste result is unusable; clearing the editor before one retry',
+              );
+              const cleared = await clearEditorBody(page!, editor);
+              // 비워졌을 때만 다시 붙인다(안 비운 채 붙이면 본문이 2배가 된다).
+              // 다만 "비우지 못했다"고 판정됐어도 실제로는 비어 있을 수 있으므로
+              // 신호를 한 번 더 확인한다 — 지워 놓고 안 붙이면 빈 글이 발행된다.
+              const empty = cleared || isEditorEmpty(await readEditorContentSignals(page!, editor));
+              if (empty) {
+                await pasteHtmlIntoBuffer(buffer, publishHtml);
+                const retried = await readSettledEditorHtml(page!, editor);
+                if (retried) {
+                  pasted = retried;
+                  integrity = verifyPastedContentIntegrity(publishHtml, retried.html);
+                  duplicated = detectDuplicatedPaste(publishHtml, retried.html);
+                }
+              } else {
+                logger.warn(
+                  'Editor could not be cleared; skipping the retry to avoid duplicating the body',
+                );
+                publishWarnings.push('에디터를 비우지 못해 붙여넣기 재시도를 생략했다');
+              }
+            }
+
+            if (duplicated) {
+              logger.error({ integrity }, 'Editor body looks duplicated; publishing as-is');
+              publishWarnings.push('본문이 중복 삽입된 것으로 보인다 — 발행물을 확인하라');
+            }
+            if (!integrity.ok) {
+              if (integrity.links.found < integrity.links.expected) {
+                // 에디터가 링크를 어떤 마크업으로 들고 있는지 남긴다 — 집계 규칙을
+                // 추측이 아니라 실제 발행 로그로 맞추기 위한 진단이다.
+                logger.warn(
+                  { anchors: sampleAnchorTags(pasted.html) },
+                  'Editor anchors sampled for link-count diagnosis',
+                );
+              }
+              // 그래도 부족하면 본문을 망가뜨리지 않고 그대로 발행하되 경고로 알린다.
+              const detail =
+                `붙여넣기 무결성 부족 — 링크 ${integrity.links.found}/${integrity.links.expected}, ` +
+                `이미지 ${integrity.images.found}/${integrity.images.expected}`;
+              logger.warn({ integrity }, 'Paste still short of expectations; publishing as-is');
+              publishWarnings.push(detail);
+            }
           }
           bodyFilled = true;
         }
@@ -1273,6 +1645,10 @@ export async function postToNaverBlog(
     const postId = extractNaverPostId(finalUrl)!;
     const url = `https://blog.naver.com/${blogId}/${postId}`;
     logger.info({ postId, url }, 'Naver post published via browser');
+
+    // 발행물 자동 점검(T6) — 로그인된 브라우저로 읽으므로 비공개 글도 검사할 수 있다.
+    // 점검 실패는 발행을 실패로 만들지 않는다(경고로만 올린다).
+    publishWarnings.push(...(await inspectPublishedPost(context, postId)));
     // 이슈 #19/#20 — 이미지 업로드 실패, 미해결 로컬 이미지, 붙여넣기 무결성
     // 부족 등 "발행은 됐지만 누락이 있다"는 사실을 UI에 경고로 전달한다.
     return publishWarnings.length > 0
@@ -1297,5 +1673,12 @@ export async function postToNaverBlog(
     );
   } finally {
     await context.close().catch(() => {});
+    if (remoteImageDir) {
+      try {
+        fs.rmSync(remoteImageDir, { recursive: true, force: true });
+      } catch {
+        // 임시 파일 정리는 best-effort
+      }
+    }
   }
 }

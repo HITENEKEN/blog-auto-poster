@@ -203,16 +203,16 @@ export function buildPartnersWidgetUrl(params: Record<string, unknown>): string 
 }
 
 /**
- * 위젯 파라미터로 실제 상품 카드 HTML 배열을 만든다(이슈 #20 T2).
+ * 위젯 파라미터로 실제 상품 목록을 가져온다(이슈 #20 T2).
  *
  * 실패(파라미터 부족/네트워크/파싱) 시 []를 반환한다 — 호출부가 마커를 drop
  * 리포트에 기록하고 발행은 계속 진행한다(발행이 막히지 않는다).
  */
-export async function fetchPartnersWidgetCards(
+export async function fetchPartnersWidgetItems(
   params: Record<string, unknown>,
   limit: number = DEFAULT_WIDGET_CARD_LIMIT,
   fetcher: WidgetFetcher = defaultWidgetFetcher,
-): Promise<string[]> {
+): Promise<PartnersWidgetItem[]> {
   const url = buildPartnersWidgetUrl(params);
   if (!url) {
     logger.warn({ params }, 'Partners widget url not buildable: id/trackingCode missing');
@@ -233,16 +233,31 @@ export async function fetchPartnersWidgetCards(
     logger.warn({ url }, 'Partners widget payload had no product items');
     return [];
   }
+  return items;
+}
 
-  return items.map((item) =>
-    buildProductPreviewCard(item.landingUrl, {
-      imageUrl: item.imageUrl || undefined,
-      title: item.name || undefined,
-      price: item.salesPrice,
-      discountRate: item.discountRate,
-      source: 'api',
-    }),
-  );
+/** 위젯 상품 한 건을 발행용 카드 HTML로 만든다. 순수 함수. */
+export function renderWidgetItemCard(item: PartnersWidgetItem): string {
+  return buildProductPreviewCard(item.landingUrl, {
+    imageUrl: item.imageUrl || undefined,
+    title: item.name || undefined,
+    price: item.salesPrice,
+    discountRate: item.discountRate,
+    source: 'api',
+  });
+}
+
+/**
+ * 위젯 파라미터로 상품 카드 HTML 배열을 만든다(이슈 #20 T2).
+ * 실패 시 [] — 호출부가 drop 리포트에 기록하고 발행은 계속된다.
+ */
+export async function fetchPartnersWidgetCards(
+  params: Record<string, unknown>,
+  limit: number = DEFAULT_WIDGET_CARD_LIMIT,
+  fetcher: WidgetFetcher = defaultWidgetFetcher,
+): Promise<string[]> {
+  const items = await fetchPartnersWidgetItems(params, limit, fetcher);
+  return items.map((item) => renderWidgetItemCard(item));
 }
 
 /** 카드 묶음으로 치환할 임베드 위젯 종류 */
@@ -265,8 +280,40 @@ export async function collectWidgetCards(
   limit: number = DEFAULT_WIDGET_CARD_LIMIT,
   fetcher: WidgetFetcher = defaultWidgetFetcher,
 ): Promise<Map<number, string>> {
+  return (await collectWidgetCardsReport(html, limit, fetcher)).cards;
+}
+
+/** 마커 한 자리에 실제로 실릴 상품 목록 — 발행 전에 사용자에게 보여준다. */
+export interface WidgetCardPlacement {
+  /** 마커의 문서 순서 인덱스 */
+  index: number;
+  kind: string;
+  /** 이 자리에 발행될 상품명 */
+  names: string[];
+}
+
+export interface CollectWidgetCardsReport {
+  cards: Map<number, string>;
+  placements: WidgetCardPlacement[];
+}
+
+/**
+ * `collectWidgetCards`와 같은 수집을 하되, 각 마커 자리에 실제로 실릴 **상품명**까지
+ * 돌려준다.
+ *
+ * 다이나믹 배너(`PartnersCoupang` 위젯)는 방문자 문맥이 있어야 관련 상품을 내놓는다.
+ * 서버에서 조회하면 문맥이 없어 일반 베스트셀러가 나온다(2026-09-08 실측:
+ * 청바지 리뷰에 쌀·화장지·복사용지가 실렸다). 상품을 바꿀 수는 없으므로, 최소한
+ * **무엇이 실리는지 발행 전에 보이게** 한다.
+ */
+export async function collectWidgetCardsReport(
+  html: string,
+  limit: number = DEFAULT_WIDGET_CARD_LIMIT,
+  fetcher: WidgetFetcher = defaultWidgetFetcher,
+): Promise<CollectWidgetCardsReport> {
   const cards = new Map<number, string>();
-  if (!html || !html.includes('data-coupang-widget')) return cards;
+  const placements: WidgetCardPlacement[] = [];
+  if (!html || !html.includes('data-coupang-widget')) return { cards, placements };
 
   const $ = cheerio.load(html);
   const markers = $('[data-coupang-widget]').toArray();
@@ -290,12 +337,14 @@ export async function collectWidgetCards(
     if (!params) continue; // 카드를 만들 위젯 파라미터가 없다(비-파트너스 스니펫 등)
 
     try {
-      const built = await fetchPartnersWidgetCards(params, limit, fetcher);
-      if (built.length > 0) cards.set(i, built.join(''));
+      const items = await fetchPartnersWidgetItems(params, limit, fetcher);
+      if (items.length === 0) continue;
+      cards.set(i, items.map((item) => renderWidgetItemCard(item)).join(''));
+      placements.push({ index: i, kind, names: items.map((item) => item.name).filter(Boolean) });
     } catch (error) {
       // 마커별 격리 — 나머지 위젯 수집은 계속한다
       logger.warn({ index: i, kind, error: String(error) }, 'Widget card collection failed');
     }
   }
-  return cards;
+  return { cards, placements };
 }

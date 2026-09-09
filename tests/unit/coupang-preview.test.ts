@@ -84,7 +84,7 @@ describe('buildProductPreviewCard / buildEventPreviewCard', () => {
     source: 'api' as const,
   };
 
-  it('상품 카드는 이미지·가격·할인·평점·CTA·파트너스 고지를 담는다', () => {
+  it('상품 카드는 이미지·가격·할인·평점·CTA를 담는다', () => {
     const card = buildProductPreviewCard('https://link.coupang.com/a/abc', data);
     expect(card).toContain('<img src="https://image.example.com/p.jpg"');
     expect(card).toContain('298,000원');
@@ -93,17 +93,38 @@ describe('buildProductPreviewCard / buildEventPreviewCard', () => {
     expect(card).toContain('⭐ 4.8 (1,234개 리뷰)');
     expect(card).toContain('href="https://link.coupang.com/a/abc"');
     expect(card).toContain('rel="nofollow sponsored"');
-    expect(card).toContain('쿠팡 파트너스 링크를 포함합니다');
     expect(card).toContain('🛒 쿠팡에서 보기');
   });
 
-  it('이미지가 없으면 이모지 플레이스홀더로 카드를 만든다', () => {
+  it('파트너스 고지를 카드마다 반복하지 않는다 (본문 상단 disclosure가 1회 고지)', () => {
+    const card = buildProductPreviewCard('https://link.coupang.com/a/abc', data);
+    expect(card).not.toContain('쿠팡 파트너스 링크를 포함합니다');
+  });
+
+  // SmartEditor는 하나의 <a>가 이미지와 텍스트를 함께 감싸면 그 앵커를 이미지
+  // 링크로만 승격시키고 텍스트 쪽 링크를 전부 버린다(실측 logNo 224404059950
+  // #11~13 — "🛒 쿠팡에서 보기"가 죽은 평문으로 발행됐다).
+  it('이미지 앵커와 텍스트 앵커를 분리한다 — 앵커가 중첩되지 않는다', () => {
+    const card = buildProductPreviewCard('https://link.coupang.com/a/abc', data);
+    const anchors = card.match(/<a\b[^>]*>/g) ?? [];
+    // 이미지 링크 1 + 제목 링크 1 + CTA 링크 1
+    expect(anchors).toHaveLength(3);
+    // 이미지를 감싼 앵커는 자기 안에서 </a>로 닫힌다(텍스트를 함께 물지 않는다).
+    expect(card).toContain('<img src="https://image.example.com/p.jpg"');
+    expect(card).toMatch(/<a\b[^>]*>\s*<img\b[^>]*\/>\s*<\/a>/);
+    // 앵커 안에 또 앵커가 들어가지 않는다.
+    expect(card).not.toMatch(/<a\b[^>]*>(?:(?!<\/a>)[\s\S])*<a\b/);
+  });
+
+  it('이미지가 없으면 이미지 앵커 없이 텍스트 링크만으로 카드를 만든다', () => {
     const card = buildProductPreviewCard('https://link.coupang.com/a/abc', {
       ...data,
       imageUrl: undefined,
     });
     expect(card).not.toContain('<img');
-    expect(card).toContain('🛍️');
+    expect(card).toContain('무선 청소기 V9');
+    expect(card).toContain('🛒 쿠팡에서 보기');
+    expect(card.match(/<a\b[^>]*>/g) ?? []).toHaveLength(2);
   });
 
   it('제목의 HTML 특수문자를 이스케이프한다', () => {

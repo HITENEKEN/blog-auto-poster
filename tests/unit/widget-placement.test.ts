@@ -2,13 +2,16 @@ import { describe, expect, it } from 'vitest';
 import {
   findSectionBoundaries,
   hasWidgetMarkers,
+  liftWidgetMarkers,
   placePresetsInContent,
+  resolveCtaAffiliateUrl,
 } from '../../src/content/WidgetPlacement';
 import {
   addLinkPreset,
   deleteLinkPreset,
   loadLinkPresets,
 } from '../../src/content/LinkPresetStore';
+import type { LinkPreset } from '../../src/content/LinkPresetStore';
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
@@ -153,5 +156,80 @@ describe('LinkPresetStore — 파일 기반 CRUD', () => {
     mkdirSync(dir, { recursive: true });
     writeFileSync(badFile, '{not json');
     expect(loadLinkPresets(badFile)).toEqual([]);
+  });
+});
+
+describe('liftWidgetMarkers — 컨테이너에 갇힌 마커 끌어올리기 (logNo 224404059950)', () => {
+  const marker = '<div data-coupang-widget="event-link" data-widget-props="%7B%7D"></div>';
+
+  it('figure 안의 마커를 figure 뒤로 옮긴다', () => {
+    // 실측: 마커가 <figure class="section-image"> 안에 있어 SE가 카드를 앞 사진의
+    // 캡션으로 흡수했다(발행물 #17 — 독립 카드가 아니었다).
+    const html = `<figure class="section-image"><p><img src="a.png"></p>${marker}<p>캡션</p></figure><p>다음</p>`;
+    const out = liftWidgetMarkers(html);
+    expect(out).toContain('</figure><div data-coupang-widget="event-link"');
+    expect(out.indexOf('data-coupang-widget')).toBeGreaterThan(out.indexOf('</figure>') - 1);
+    expect(out).toContain('<p>캡션</p>');
+  });
+
+  it('리스트 항목 안의 마커도 끌어올린다', () => {
+    const out = liftWidgetMarkers(`<ul><li>항목${marker}</li></ul><p>다음</p>`);
+    expect(out).toContain('</ul><div data-coupang-widget="event-link"');
+    expect(out).toContain('<li>항목</li>');
+  });
+
+  it('중첩된 경우 가장 바깥 컨테이너 뒤로 옮긴다', () => {
+    const out = liftWidgetMarkers(`<figure><figcaption>캡션${marker}</figcaption></figure>`);
+    expect(out).toContain('</figure><div data-coupang-widget');
+  });
+
+  it('이미 블록 최상위면 원본 문자열을 그대로 반환한다', () => {
+    const html = `<p>본문</p>${marker}<p>다음</p>`;
+    expect(liftWidgetMarkers(html)).toBe(html);
+  });
+
+  it('마커가 없으면 원본을 그대로 반환한다', () => {
+    expect(liftWidgetMarkers('<p>본문</p>')).toBe('<p>본문</p>');
+  });
+});
+
+describe('resolveCtaAffiliateUrl — CTA 제휴 URL 결정 (logNo 224404059950)', () => {
+  const preset = (kind: string, props: Record<string, unknown>): LinkPreset =>
+    ({ id: 'p1', label: 'l', kind, props, createdAt: '' }) as LinkPreset;
+
+  const productMarker = (props: Record<string, unknown>): string =>
+    `<div data-coupang-widget="product-link" data-widget-props="${encodeURIComponent(
+      JSON.stringify(props),
+    )}"></div>`;
+
+  it('프리셋의 product-link URL을 최우선으로 쓴다', () => {
+    expect(
+      resolveCtaAffiliateUrl(
+        [preset('product-link', { url: 'https://link.coupang.com/a/preset' })],
+        productMarker({ url: 'https://link.coupang.com/a/body' }),
+      ),
+    ).toBe('https://link.coupang.com/a/preset');
+  });
+
+  it('프리셋이 없으면 본문의 첫 유효 product-link 마커를 쓴다', () => {
+    // 실측 사고: 프리셋이 0개라 CTA가 통째로 사라졌다. 본문 마커도 봐야 한다.
+    expect(
+      resolveCtaAffiliateUrl([], productMarker({ url: 'https://link.coupang.com/a/body' })),
+    ).toBe('https://link.coupang.com/a/body');
+  });
+
+  it('본문 마커의 URL이 배너 스니펫이어도 href를 회수해 쓴다', () => {
+    const snippet = '<a href="https://link.coupang.com/a/snip"><img src="https://cdn/x.jpg"></a>';
+    expect(resolveCtaAffiliateUrl([], productMarker({ url: snippet }))).toBe(
+      'https://link.coupang.com/a/snip',
+    );
+  });
+
+  it('둘 다 없으면 글 메타의 affiliateUrl로 폴백한다', () => {
+    expect(resolveCtaAffiliateUrl([], '<p>본문</p>', 'https://link.coupang.com/a/meta')).toBe(
+      'https://link.coupang.com/a/meta',
+    );
+    expect(resolveCtaAffiliateUrl([], '<p>본문</p>', '#')).toBe('');
+    expect(resolveCtaAffiliateUrl([], '<p>본문</p>')).toBe('');
   });
 });

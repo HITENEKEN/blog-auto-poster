@@ -30,13 +30,18 @@ import {
 } from '@content/ImageGenerator';
 import { buildSectionImageSpecs } from '@content/imagePrompts';
 import { createPostAssembler } from '@content/PostAssembler';
-import { expandCoupangWidgetsReport } from '@content/CoupangWidgets';
+import { expandCoupangWidgetsReport, normalizeLinkWidgetProps } from '@content/CoupangWidgets';
 import { buildPublishPreviewHtml, rewriteLocalImageSrcsForWeb } from '@content/PublishPreview';
 import { addLinkPreset, deleteLinkPreset, loadLinkPresets } from '@content/LinkPresetStore';
-import { fillCtaAffiliateUrl, placePresetsInContent } from '@content/WidgetPlacement';
+import {
+  fillCtaAffiliateUrl,
+  liftWidgetMarkers,
+  placePresetsInContent,
+  resolveCtaAffiliateUrl,
+} from '@content/WidgetPlacement';
 import { COUPANG_WIDGET_KINDS, type CoupangWidgetKind } from '@content/CoupangWidgets';
 import { fetchLinkPreviewCards, stylePublishHtml } from '@content/CoupangPreview';
-import { collectWidgetCards } from '@content/PartnersWidget';
+import { collectWidgetCardsReport } from '@content/PartnersWidget';
 import { generateDraftFromKeyword } from '@content/KeywordPostGenerator';
 import {
   savePostFiles,
@@ -1248,11 +1253,21 @@ export async function registerRoutes(app: FastifyInstance, context: RouteContext
     if (!body.kind || !COUPANG_WIDGET_KINDS.includes(body.kind as CoupangWidgetKind)) {
       return { error: `kind must be one of: ${COUPANG_WIDGET_KINDS.join(', ')}` };
     }
-    const preset = addLinkPreset({
-      label: body.label ?? '',
-      kind: body.kind as CoupangWidgetKind,
-      props: body.props ?? {},
-    });
+    const kind = body.kind as CoupangWidgetKind;
+    let props = body.props ?? {};
+    // 링크류는 저장 시점에 정규화한다 — URL 칸에 파트너스 배너 스니펫이 들어오면
+    // href/이미지/alt를 회수하고, 발행 후 살아남지 못하는 URL이면 저장을 거부한다
+    // (2026-09-07 발행 사고: 스니펫이 그대로 저장돼 죽은 평문으로 발행됐다).
+    if (kind === 'product-link' || kind === 'event-link') {
+      const link = normalizeLinkWidgetProps(kind, props);
+      if (!link) {
+        return { error: 'URL은 http(s) 링크여야 합니다 (파트너스 배너 HTML도 허용됩니다)' };
+      }
+      props = link.imageUrl
+        ? { url: link.url, text: link.text, imageUrl: link.imageUrl }
+        : { url: link.url, text: link.text };
+    }
+    const preset = addLinkPreset({ label: body.label ?? '', kind, props });
     return { preset };
   });
 
@@ -1283,7 +1298,12 @@ export async function registerRoutes(app: FastifyInstance, context: RouteContext
 
   app.post('/api/posts/:id/publish', async (request) => {
     const { id } = request.params as { id: string };
-    const { platform } = request.body as { platform?: string };
+    // visibility: 비공개 발행 지원. 발행 파이프라인 변경을 실제 블로그에서 검증할 때
+    // 공개 노출 없이 확인하기 위한 옵션이다(미지정 시 기존대로 공개).
+    const { platform, visibility } = request.body as {
+      platform?: string;
+      visibility?: 'public' | 'private';
+    };
 
     const postPath = `./output/posts/${id}/meta.json`;
     const fs = await import('fs');
@@ -1335,7 +1355,17 @@ export async function registerRoutes(app: FastifyInstance, context: RouteContext
     // 템플릿이 CTA 자체를 렌더하지 않는다(T6). 사용자가 등록한 첫 product-link
     // 프리셋 URL이 있으면 본문 속 죽은 CTA 앵커(href ''/'#')에 실제 링크를 채운다.
     // 프리셋이 없으면 생략한다 — CTA는 없는 상태로 발행된다(죽은 버튼 방지).
-    const ctaUrl = presets.find((p) => p.kind === 'product-link' && p.props?.url)?.props?.url ?? '';
+    // 마커가 <figure>/<p> 안에 갇혀 있으면 SE가 앞 사진의 캡션으로 흡수한다
+    // (실측 logNo 224404059950 #17) — 블록 최상위로 끌어올린 뒤 확장한다.
+    const lifted = liftWidgetMarkers(content);
+    if (lifted !== content) {
+      content = lifted;
+      logger.info({ postId: id }, 'Publish: widget markers lifted out of inline containers');
+    }
+
+    // CTA에 채울 제휴 URL: 프리셋 → 본문의 첫 유효 product-link 마커 → 글 메타.
+    // 프리셋만 보던 기존 로직은 프리셋이 0개일 때 CTA를 통째로 잃었다(실측).
+    const ctaUrl = resolveCtaAffiliateUrl(presets, content, postMeta.affiliateUrl);
     if (ctaUrl) {
       const filled = fillCtaAffiliateUrl(content, ctaUrl);
       if (filled !== content) {
@@ -1372,6 +1402,7 @@ export async function registerRoutes(app: FastifyInstance, context: RouteContext
         visibility: 'public',
         allowComments: true,
       };
+      if (visibility) platformContent.visibility = visibility;
 
       // 1) 링크 미리보기 카드 수집(이슈 #12) — product-link/event-link URL을 읽어
       //    상품 이미지·가격·평점 카드를 만든다. 실패 시 해당 링크만 텍스트 링크로 폴백.
@@ -1384,15 +1415,16 @@ export async function registerRoutes(app: FastifyInstance, context: RouteContext
       // 1-b) 임베드 위젯 → 실제 상품 카드 수집(이슈 #20 T4). 네이버는 iframe을
       //    100% 제거하므로(원인 B) 파트너스 위젯 자리엔 인라인 상품 카드를 발행한다.
       //    마커별 네트워크 실패는 격리되고, 카드를 못 만든 마커만 drop으로 기록된다.
-      const widgetCards = await collectWidgetCards(platformContent.content).catch(
+      const widgetReportCards = await collectWidgetCardsReport(platformContent.content).catch(
         (error: unknown) => {
           logger.warn(
             { postId: id, platform: platformName, error: String(error) },
             'Publish: partners widget card collection failed',
           );
-          return new Map<number, string>();
+          return { cards: new Map<number, string>(), placements: [] };
         },
       );
+      const widgetCards = widgetReportCards.cards;
 
       // 2) 위젯 마커 확장 — 사전 수집한 카드(미리보기 #12 / 위젯 상품 카드 #20)로
       //    마커를 치환하고, 발행 시점에는 위젯을 중앙 정렬 컨테이너로 감싼다(#12).
@@ -1426,6 +1458,12 @@ export async function registerRoutes(app: FastifyInstance, context: RouteContext
       const widgetWarnings: string[] = widgetReport.dropped.map((d) => `${d.kind}: ${d.reason}`);
       if (leftoverMarkers > 0) {
         widgetWarnings.push(`unexpanded markers: ${leftoverMarkers}`);
+      }
+      // 파트너스 위젯은 방문자 문맥 없이 서버에서 조회하면 글 주제와 무관한
+      // 베스트셀러를 돌려준다(실측: 청바지 리뷰에 쌀·화장지). 무엇이 실리는지
+      // 발행 결과에 그대로 노출해 사용자가 판단할 수 있게 한다.
+      for (const placement of widgetReportCards.placements) {
+        widgetWarnings.push(`[확인] ${placement.kind} 자리 상품: ${placement.names.join(', ')}`);
       }
 
       // #7: 발행 대상 이미지 로컬 경로 수집 (meta.images → post.html <img> 폴백) —

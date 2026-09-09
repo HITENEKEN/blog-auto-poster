@@ -4,7 +4,7 @@ import StarterKit from '@tiptap/starter-kit';
 import { Button } from '../../pages/ui/Button';
 import { Input } from '../../pages/ui/Input';
 import { Dialog } from '../../pages/ui/dialog';
-import { COUPANG_WIDGET_LABELS } from '@shared/coupangWidgets';
+import { COUPANG_WIDGET_LABELS, isHttpUrl, parseLinkInput } from '@shared/coupangWidgets';
 import type { CoupangWidgetKind } from '@shared/coupangWidgets';
 import {
   CoupangWidget,
@@ -121,6 +121,33 @@ export default function RichEditor({ content, onUpdate, mode, onWidgetEdit }: Ri
     setWidgetDialog({ kind, props: {} });
   };
 
+  const isLinkKind = widgetDialog ? LINK_KINDS.includes(widgetDialog.kind) : false;
+  const isBannerKind = widgetDialog?.kind === 'ad-banner';
+
+  /**
+   * URL 칸 입력 처리. 파트너스 **배너 HTML 스니펫**을 통째로 붙여넣는 실제 사용
+   * 패턴을 살린다(2026-09-07 발행 사고: 스니펫이 URL로 저장돼 발행물에 링크 없는
+   * 평문만 남았다). 스니펫이면 href/이미지/alt를 뽑아 각 칸을 채워 준다.
+   */
+  const handleWidgetUrlChange = (value: string) => {
+    const parsed = parseLinkInput(value);
+    if (!parsed.fromHtml) {
+      setWidgetUrl(value);
+      return;
+    }
+    setWidgetUrl(parsed.url);
+    if (parsed.imageUrl) setWidgetImageUrl(parsed.imageUrl);
+    if (parsed.altText && !widgetText.trim()) setWidgetText(parsed.altText);
+  };
+
+  /** 링크류는 http(s) URL이 없으면 삽입할 수 없다 — 발행물에서 죽은 평문이 된다. */
+  const canConfirmWidget = (() => {
+    if (!widgetDialog) return false;
+    if (isBannerKind) return isHttpUrl(widgetUrl.trim()) && widgetImageUrl.trim() !== '';
+    if (LINK_KINDS.includes(widgetDialog.kind)) return isHttpUrl(widgetUrl.trim());
+    return widgetSnippet.trim() !== '';
+  })();
+
   const handleWidgetConfirm = () => {
     if (!widgetDialog) return;
     // 링크류 위젯은 표시 텍스트가 비어 발행 시 유실되지 않도록 기본 라벨을 부여한다(이슈 #10).
@@ -129,7 +156,12 @@ export default function RichEditor({ content, onUpdate, mode, onWidgetEdit }: Ri
       widgetDialog.kind === 'ad-banner'
         ? { url: widgetUrl.trim(), imageUrl: widgetImageUrl.trim(), text: widgetText.trim() }
         : LINK_KINDS.includes(widgetDialog.kind)
-          ? { url: widgetUrl.trim(), text: widgetText.trim() || defaultLinkText }
+          ? {
+              url: widgetUrl.trim(),
+              text: widgetText.trim() || defaultLinkText,
+              // 배너 스니펫에서 회수한 이미지가 있으면 이미지 링크로 발행된다.
+              ...(widgetImageUrl.trim() ? { imageUrl: widgetImageUrl.trim() } : {}),
+            }
           : { snippet: widgetSnippet };
     if (widgetDialog.update) {
       widgetDialog.update(props);
@@ -139,8 +171,6 @@ export default function RichEditor({ content, onUpdate, mode, onWidgetEdit }: Ri
     setWidgetDialog(null);
   };
 
-  const isLinkKind = widgetDialog ? LINK_KINDS.includes(widgetDialog.kind) : false;
-  const isBannerKind = widgetDialog?.kind === 'ad-banner';
   const widgetKinds: CoupangWidgetKind[] =
     mode === 'post'
       ? [
@@ -260,7 +290,7 @@ export default function RichEditor({ content, onUpdate, mode, onWidgetEdit }: Ri
             <Button variant="outline" size="sm" onClick={() => setWidgetDialog(null)}>
               취소
             </Button>
-            <Button size="sm" onClick={handleWidgetConfirm}>
+            <Button size="sm" onClick={handleWidgetConfirm} disabled={!canConfirmWidget}>
               {widgetDialog?.update ? '수정' : '삽입'}
             </Button>
           </>
@@ -303,17 +333,34 @@ export default function RichEditor({ content, onUpdate, mode, onWidgetEdit }: Ri
         ) : widgetDialog && isLinkKind ? (
           <div className="space-y-3">
             <p className="text-xs text-muted-foreground">
-              쿠팡 파트너스에서 생성한 링크 URL과 표시할 텍스트를 입력하세요.
+              쿠팡 파트너스에서 생성한 링크 URL과 표시할 텍스트를 입력하세요. 이미지 배너 HTML을
+              그대로 붙여넣어도 됩니다 — 링크·이미지·상품명을 자동으로 뽑아 채웁니다.
             </p>
             <label className="block text-sm font-medium">
               URL
               <Input
                 className="mt-1"
-                placeholder="https://link.coupang.com/..."
+                placeholder="https://link.coupang.com/... 또는 배너 HTML 붙여넣기"
                 value={widgetUrl}
-                onChange={(e) => setWidgetUrl(e.target.value)}
+                onChange={(e) => handleWidgetUrlChange(e.target.value)}
               />
             </label>
+            {widgetUrl.trim() !== '' && !isHttpUrl(widgetUrl.trim()) && (
+              <p className="text-xs text-destructive">
+                http(s)로 시작하는 링크가 필요합니다. 네이버는 그 외 링크를 발행 시 제거해 텍스트만
+                남깁니다.
+              </p>
+            )}
+            {widgetImageUrl.trim() !== '' && (
+              <label className="block text-sm font-medium">
+                배너 이미지 URL (자동 인식)
+                <Input
+                  className="mt-1"
+                  value={widgetImageUrl}
+                  onChange={(e) => setWidgetImageUrl(e.target.value)}
+                />
+              </label>
+            )}
             <label className="block text-sm font-medium">
               표시 텍스트
               <Input

@@ -2,9 +2,11 @@ import * as cheerio from 'cheerio';
 import type { LinkPreset } from './LinkPresetStore';
 import {
   buildCoupangWidgetMarker,
+  normalizeLinkWidgetProps,
   type CoupangWidgetKind,
   type CoupangWidgetProps,
 } from './CoupangWidgets';
+import { isSurvivableHref } from './NaverHtml';
 
 /**
  * 사용자가 등록한 링크/배너 프리셋을 본문에 자동 배치한다(이슈 #18).
@@ -40,6 +42,42 @@ export function findSectionBoundaries(html: string): Array<{ start: number; end:
     boundaries.push({ start: headings[i].end, end });
   }
   return boundaries;
+}
+
+/**
+ * 위젯 마커가 갇히면 SmartEditor가 앞 요소에 흡수해 버리는 컨테이너들.
+ * `<figure>` 안에 들어간 마커는 섹션 사진의 **캡션**으로 병합됐다
+ * (2026-09-07 실발행물 logNo 224404059950 #17 — 이벤트 카드가 독립 카드가 아니라
+ * 앞 사진의 캡션 텍스트로 발행됐다).
+ */
+const MARKER_TRAP_TAGS = 'figure,figcaption,p,li,ul,ol,blockquote,table';
+
+/**
+ * 블록 컨테이너 안에 갇힌 위젯 마커를 그 컨테이너 **뒤 형제**로 끌어올린다.
+ * 순수 함수 — 유닛 테스트 대상.
+ *
+ * 에디터에서 커서 위치에 마커를 삽입하면 `<figure class="section-image">`나 `<p>`
+ * 내부에 들어갈 수 있다. 그 상태로 발행하면 SE가 컨테이너를 컴포넌트 1개로 접으면서
+ * 위젯을 캡션으로 흡수해, 카드가 독립 블록으로 보이지 않는다.
+ *
+ * - 중첩된 경우 **가장 바깥쪽** 컨테이너 뒤로 옮긴다.
+ * - 옮길 마커가 없으면 원본 문자열을 그대로 반환한다 — cheerio 재직렬화로
+ *   문서 구조가 바뀔 여지를 없앤다(fillCtaAffiliateUrl과 같은 규약).
+ */
+export function liftWidgetMarkers(html: string): string {
+  if (!html || !hasWidgetMarkers(html)) return html;
+
+  const $ = cheerio.load(html);
+  let moved = 0;
+  $('[data-coupang-widget]').each((_, el) => {
+    const node = $(el);
+    const traps = node.parents(MARKER_TRAP_TAGS);
+    if (traps.length === 0) return;
+    traps.last().after(node);
+    moved += 1;
+  });
+  if (moved === 0) return html;
+  return $('body').html() ?? html;
 }
 
 export interface PlacementResult {
@@ -132,4 +170,45 @@ export function fillCtaAffiliateUrl(html: string, url: string): string {
   }
   if (filled === 0) return html;
   return $('body').html() ?? html;
+}
+
+/**
+ * 본문 CTA 버튼에 채울 제휴 URL을 정한다. 순수 함수 — 유닛 테스트 대상.
+ *
+ * 우선순위: 등록된 product-link 프리셋 → 본문의 첫 유효 product-link 마커 →
+ * 글 메타의 affiliateUrl.
+ *
+ * 배경(2026-09-07 실발행물 logNo 224404059950): 기존 로직은 **프리셋만** 봤다.
+ * 프리셋이 하나도 없는 상태라 `ctaUrl`이 빈 값이 됐고, 템플릿도 `affiliateUrl`이
+ * 비어 CTA를 렌더하지 않아 "가격 확인하기" 버튼이 발행물에서 통째로 사라졌다.
+ * 사용자가 본문에 직접 꽂은 상품 링크가 있으면 그걸 쓰는 게 맞다.
+ */
+export function resolveCtaAffiliateUrl(
+  presets: LinkPreset[],
+  html: string,
+  fallbackUrl?: string,
+): string {
+  for (const preset of presets) {
+    if (preset.kind !== 'product-link') continue;
+    const link = normalizeLinkWidgetProps(preset.kind, preset.props as CoupangWidgetProps);
+    if (link) return link.url;
+  }
+
+  if (html && hasWidgetMarkers(html)) {
+    const $ = cheerio.load(html);
+    for (const el of $('[data-coupang-widget="product-link"]').toArray()) {
+      try {
+        const props = JSON.parse(
+          decodeURIComponent($(el).attr('data-widget-props') || ''),
+        ) as CoupangWidgetProps;
+        const link = normalizeLinkWidgetProps('product-link', props);
+        if (link) return link.url;
+      } catch {
+        // props가 깨진 마커는 건너뛴다 — expand 단계가 drop으로 기록한다
+      }
+    }
+  }
+
+  const fallback = (fallbackUrl ?? '').trim();
+  return isSurvivableHref(fallback) ? fallback : '';
 }
