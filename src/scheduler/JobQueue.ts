@@ -591,8 +591,11 @@ export class JobQueueImpl implements JobQueue {
     affiliateUrl?: string;
     status: string;
     metadata?: Record<string, unknown>;
+    /** 발행 시각 오버라이드 (기본: 현재 시각). 마이그레이션/테스트용. */
+    publishedAt?: string;
   }): void {
     const now = new Date().toISOString();
+    const publishedAt = post.publishedAt || now;
     this.db
       .prepare(
         `
@@ -611,7 +614,7 @@ export class JobQueueImpl implements JobQueue {
         post.productId || null,
         post.affiliateUrl || null,
         post.status,
-        now,
+        publishedAt,
         post.metadata ? JSON.stringify(post.metadata) : null,
         now,
       );
@@ -622,9 +625,13 @@ export class JobQueueImpl implements JobQueue {
       platform?: string;
       status?: string;
       affiliate?: string;
+      /** 제목 부분일치 (LIKE %title%) — 대소문자·한글 그대로 매칭 (이슈 #24 2-3). */
+      title?: string;
       fromDate?: string;
       toDate?: string;
       limit?: number;
+      /** 페이지네이션 오프셋 (이슈 #24 2-3 — 기존엔 무시돼 2페이지가 1페이지와 동일했다). */
+      offset?: number;
     } = {},
   ): PublishedPostRow[] {
     let query = 'SELECT * FROM published_posts WHERE 1=1';
@@ -638,6 +645,10 @@ export class JobQueueImpl implements JobQueue {
       query += ' AND status = ?';
       params.push(filters.status);
     }
+    if (filters.title) {
+      query += ' AND title LIKE ?';
+      params.push(`%${filters.title}%`);
+    }
     if (filters.fromDate) {
       query += ' AND published_at >= ?';
       params.push(filters.fromDate);
@@ -649,13 +660,33 @@ export class JobQueueImpl implements JobQueue {
 
     query += ' ORDER BY published_at DESC';
 
-    if (filters.limit) {
+    // SQLite는 OFFSET 단독을 허용하지 않으므로 offset이 있으면 LIMIT을 함께 건다.
+    if (filters.limit !== undefined || filters.offset) {
       query += ' LIMIT ?';
-      params.push(filters.limit);
+      params.push(filters.limit ?? -1); // -1 = 무제한 (SQLite 관례)
+      if (filters.offset) {
+        query += ' OFFSET ?';
+        params.push(filters.offset);
+      }
     }
 
     const stmt = this.db.prepare(query);
     return stmt.all(...params) as PublishedPostRow[];
+  }
+
+  /**
+   * published_posts에서 단일 행을 삭제한다 (이슈 #24 2-1).
+   * 삭제된 행 수를 반환한다(0이면 대상 없음).
+   */
+  deletePublishedPost(id: string): number {
+    const info = this.db.prepare('DELETE FROM published_posts WHERE id = ?').run(id);
+    return info.changes;
+  }
+
+  /** published_posts 단일 행 조회 (이슈 #24 2-1 — 삭제 전 draftId/원문 링크 확인용). */
+  getPublishedPostById(id: string): PublishedPostRow | null {
+    const row = this.db.prepare('SELECT * FROM published_posts WHERE id = ?').get(id);
+    return (row as PublishedPostRow) ?? null;
   }
 
   close(): void {

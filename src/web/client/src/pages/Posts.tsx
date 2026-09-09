@@ -5,7 +5,6 @@ import { PostSummary } from '@shared/types';
 import { Card, CardContent } from './ui/Card';
 import { Button } from './ui/Button';
 import { Input } from './ui/Input';
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from './ui/Select';
 import { Badge } from './ui/Badge';
 import { FileText, RefreshCw, ExternalLink, Pencil, Loader2, Trash2 } from 'lucide-react';
 import { formatDistanceToNow } from 'date-fns';
@@ -22,6 +21,19 @@ interface DraftSummary {
   createdAt: string;
   generationStatus?: 'generating' | 'done' | 'failed';
   generationError?: string;
+}
+
+/** 삭제 대상 — 드래프트(하단 카드)와 발행 포스트(목록)를 모두 담는다 (이슈 #24 2-1). */
+interface DeleteTarget {
+  /** DELETE /api/posts/:id 에 쓰는 id. 드래프트는 디렉터리 id, 발행 포스트는 published_posts 행 id. */
+  id: string;
+  title: string;
+  published: boolean;
+  /** 발행 포스트의 외부 원문 링크 (네이버 등) — 삭제해도 남는다는 안내에 사용. */
+  url?: string | null;
+  generating?: boolean;
+  /** 목록에서 지운 뒤 옵티미스틱 반영용 */
+  source: 'draft' | 'post';
 }
 
 const statusColors = {
@@ -41,12 +53,22 @@ export default function Posts() {
   const [total, setTotal] = useState(0);
   const [page, setPage] = useState(1);
   const [drafts, setDrafts] = useState<DraftSummary[]>([]);
+  // 동작하지 않던 상태/플랫폼/템플릿 필터 3종을 제거하고 제목·발행날짜 검색으로 교체 (이슈 #24 2-2·2-3).
   const [filters, setFilters] = useState({
-    status: '',
-    platform: '',
-    template: '',
+    title: '',
+    fromDate: '',
+    toDate: '',
     limit: 20,
   });
+  // 제목 입력은 타이핑마다 조회하지 않도록 디바운스한다.
+  const [titleInput, setTitleInput] = useState('');
+  useEffect(() => {
+    const t = setTimeout(() => {
+      setFilters((f) => (f.title === titleInput ? f : { ...f, title: titleInput }));
+      setPage(1);
+    }, 400);
+    return () => clearTimeout(t);
+  }, [titleInput]);
 
   const fetchPosts = useCallback(async () => {
     setLoading(true);
@@ -54,9 +76,9 @@ export default function Posts() {
       const params = new URLSearchParams({
         limit: String(filters.limit),
         offset: String((page - 1) * filters.limit),
-        ...(filters.status && { status: filters.status }),
-        ...(filters.platform && { platform: filters.platform }),
-        ...(filters.template && { template: filters.template }),
+        ...(filters.title && { title: filters.title }),
+        ...(filters.fromDate && { fromDate: filters.fromDate }),
+        ...(filters.toDate && { toDate: filters.toDate }),
       });
       const response = await api.get(`/api/posts?${params}`);
       setPosts(response.data.posts);
@@ -71,7 +93,7 @@ export default function Posts() {
     fetchPosts();
   }, [fetchPosts]);
 
-  const [deleteTarget, setDeleteTarget] = useState<DraftSummary | null>(null);
+  const [deleteTarget, setDeleteTarget] = useState<DeleteTarget | null>(null);
   const [deleting, setDeleting] = useState(false);
 
   const fetchDrafts = useCallback(async () => {
@@ -96,20 +118,27 @@ export default function Posts() {
     return () => clearInterval(timer);
   }, [hasGenerating, fetchDrafts]);
 
-  const handleDeleteDraft = async () => {
+  const handleConfirmDelete = async () => {
     if (!deleteTarget) return;
     setDeleting(true);
+    const deleted = deleteTarget;
     try {
-      await api.delete(`/api/posts/${deleteTarget.id}`);
-      const deleted = deleteTarget;
-      setDrafts((prev) => prev.filter((d) => d.id !== deleted.id));
+      // 발행 포스트는 실수 삭제 방지를 위해 서버가 confirm 파라미터를 요구한다.
+      const qs = deleted.published ? '?confirm=published' : '';
+      await api.delete(`/api/posts/${deleted.id}${qs}`);
+      if (deleted.source === 'draft') {
+        setDrafts((prev) => prev.filter((d) => d.id !== deleted.id));
+      } else {
+        setPosts((prev) => prev.filter((p) => p.id !== deleted.id));
+        setTotal((t) => Math.max(0, t - 1));
+      }
       toast({ title: '삭제되었습니다', description: deleted.title || deleted.id });
       setDeleteTarget(null);
+      if (deleted.source === 'post') fetchPosts();
     } catch (error) {
       toast({
         title: '삭제 실패',
-        description:
-          (isAxiosError(error) && error.response?.data?.error) || '드래프트 삭제에 실패했습니다.',
+        description: (isAxiosError(error) && error.response?.data?.error) || '삭제에 실패했습니다.',
         variant: 'destructive',
       });
     } finally {
@@ -222,7 +251,15 @@ export default function Posts() {
                             variant="ghost"
                             size="icon"
                             title="삭제"
-                            onClick={() => setDeleteTarget(draft)}
+                            onClick={() =>
+                              setDeleteTarget({
+                                id: draft.id,
+                                title: draft.title || draft.id,
+                                published: false,
+                                generating: draft.generationStatus === 'generating',
+                                source: 'draft',
+                              })
+                            }
                           >
                             <Trash2 className="h-4 w-4 text-red-500" />
                           </Button>
@@ -237,45 +274,56 @@ export default function Posts() {
         </Card>
       )}
 
-      {/* Filters */}
+      {/* 검색 — 제목(디바운스) + 발행날짜 범위 (이슈 #24 2-3) */}
       <Card>
         <CardContent className="p-4">
-          <div className="flex flex-wrap gap-4">
-            <Select
-              value={filters.status}
-              onValueChange={(v) => setFilters({ ...filters, status: v })}
-            >
-              <SelectTrigger className="w-[180px]">
-                <SelectValue placeholder="상태" />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="">전체</SelectItem>
-                <SelectItem value="published">발행됨</SelectItem>
-                <SelectItem value="failed">실패</SelectItem>
-                <SelectItem value="ready">준비됨</SelectItem>
-                <SelectItem value="draft">초안</SelectItem>
-              </SelectContent>
-            </Select>
-            <Select
-              value={filters.platform}
-              onValueChange={(v) => setFilters({ ...filters, platform: v })}
-            >
-              <SelectTrigger className="w-[180px]">
-                <SelectValue placeholder="플랫폼" />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="">전체</SelectItem>
-                <SelectItem value="tistory">티스토리</SelectItem>
-                <SelectItem value="wordpress">워드프레스</SelectItem>
-                <SelectItem value="youtube-shorts">유튜브 쇼츠</SelectItem>
-              </SelectContent>
-            </Select>
-            <Input
-              placeholder="템플릿 검색"
-              value={filters.template}
-              onChange={(e) => setFilters({ ...filters, template: e.target.value })}
-              className="w-[200px]"
-            />
+          <div className="flex flex-wrap items-end gap-4">
+            <div>
+              <label className="mb-1 block text-xs text-muted-foreground">제목 검색</label>
+              <Input
+                placeholder="제목 일부"
+                value={titleInput}
+                onChange={(e) => setTitleInput(e.target.value)}
+                className="w-[220px]"
+              />
+            </div>
+            <div>
+              <label className="mb-1 block text-xs text-muted-foreground">발행일 (시작)</label>
+              <Input
+                type="date"
+                value={filters.fromDate}
+                onChange={(e) => {
+                  setFilters((f) => ({ ...f, fromDate: e.target.value }));
+                  setPage(1);
+                }}
+                className="w-[170px]"
+              />
+            </div>
+            <div>
+              <label className="mb-1 block text-xs text-muted-foreground">발행일 (종료)</label>
+              <Input
+                type="date"
+                value={filters.toDate}
+                onChange={(e) => {
+                  setFilters((f) => ({ ...f, toDate: e.target.value }));
+                  setPage(1);
+                }}
+                className="w-[170px]"
+              />
+            </div>
+            {(filters.title || filters.fromDate || filters.toDate) && (
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={() => {
+                  setTitleInput('');
+                  setFilters((f) => ({ ...f, title: '', fromDate: '', toDate: '' }));
+                  setPage(1);
+                }}
+              >
+                초기화
+              </Button>
+            )}
           </div>
         </CardContent>
       </Card>
@@ -378,6 +426,23 @@ export default function Posts() {
                                 발행
                               </Button>
                             )}
+                            {/* 발행 포스트도 삭제 가능 — 로컬 기록만 지우고 네이버 원문은 남는다 (이슈 #24 2-1) */}
+                            <Button
+                              variant="ghost"
+                              size="icon"
+                              title="삭제"
+                              onClick={() =>
+                                setDeleteTarget({
+                                  id: post.id,
+                                  title: post.title || post.id,
+                                  published: post.status === 'published',
+                                  url: post.url || null,
+                                  source: 'post',
+                                })
+                              }
+                            >
+                              <Trash2 className="h-4 w-4 text-red-500" />
+                            </Button>
                           </div>
                         </td>
                       </tr>
@@ -418,19 +483,19 @@ export default function Posts() {
         </CardContent>
       </Card>
 
-      {/* 드래프트 삭제 확인 */}
+      {/* 삭제 확인 — 발행/드래프트로 문구 분기 (이슈 #24 2-1) */}
       <Dialog
         open={deleteTarget !== null}
         onClose={() => {
           if (!deleting) setDeleteTarget(null);
         }}
-        title="드래프트 삭제"
+        title={deleteTarget?.published ? '발행 포스트 삭제' : '드래프트 삭제'}
         footer={
           <>
             <Button variant="outline" onClick={() => setDeleteTarget(null)} disabled={deleting}>
               취소
             </Button>
-            <Button variant="destructive" onClick={handleDeleteDraft} disabled={deleting}>
+            <Button variant="destructive" onClick={handleConfirmDelete} disabled={deleting}>
               {deleting ? (
                 <Loader2 className="mr-2 h-4 w-4 animate-spin" />
               ) : (
@@ -445,7 +510,26 @@ export default function Posts() {
           삭제하시겠습니까?{' '}
           <span className="font-medium">{deleteTarget?.title || deleteTarget?.id}</span>
         </p>
-        {deleteTarget?.generationStatus === 'generating' && (
+        {deleteTarget?.published && (
+          <div className="mt-2 space-y-1 text-xs text-muted-foreground">
+            <p>이 작업은 로컬 기록(드래프트 파일·발행 이력)만 삭제합니다.</p>
+            <p className="font-medium text-amber-600">
+              네이버에 발행된 원문은 남습니다. 원문은 네이버에서 직접 삭제하세요.
+            </p>
+            {deleteTarget.url && (
+              <a
+                href={deleteTarget.url}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="inline-flex items-center gap-1 text-primary underline"
+              >
+                <ExternalLink className="h-3 w-3" />
+                발행된 원문 열기
+              </a>
+            )}
+          </div>
+        )}
+        {deleteTarget?.generating && (
           <p className="mt-2 text-xs text-muted-foreground">
             이 드래프트는 현재 생성 중입니다. 삭제하면 생성 작업도 중단됩니다.
           </p>

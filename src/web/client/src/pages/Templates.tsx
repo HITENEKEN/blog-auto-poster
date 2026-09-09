@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import RichEditor from '../components/Editor/RichEditor';
 import { bodyToEditable, editableToHbsBody, splitRaw } from '@shared/hbsConvert';
+import { labelForTemplateField } from '@shared/templateFieldLabels';
 import { api } from '../services/api';
 import { Card, CardContent, CardHeader } from './ui/Card';
 import { Button } from './ui/Button';
@@ -25,10 +26,44 @@ import {
 interface TemplateInfo {
   filename: string;
   name: string;
+  /** 화면 표시용 한국어 이름 (이슈 #23 1-2). 비면 name으로 폴백. */
+  displayName?: string;
+  description?: string;
   platforms: string[];
   requiredFields: string[];
   optionalFields?: string[];
   seoTitleTemplate?: string;
+}
+
+/** 신규 템플릿 골격은 기준 템플릿(naver-coupang-review)을 시드로 복제한다 (이슈 #23 1-3.2). */
+const SEED_TEMPLATE = 'naver-coupang-review';
+
+/** frontmatter 원문에서 최상위 스칼라 키 값을 읽는다(따옴표 제거). 없으면 ''. */
+function readFmScalar(frontmatter: string, key: string): string {
+  const m = new RegExp(`^${key}:\\s*(.*)$`, 'm').exec(frontmatter);
+  if (!m) return '';
+  return m[1].trim().replace(/^["']|["']$/g, '');
+}
+
+/** frontmatter 원문의 최상위 스칼라 키를 갱신한다. 없으면 name: 줄 바로 뒤에 추가.
+ *  빈 값이면 해당 줄을 제거한다. frontmatter 구분자(---)는 그대로 보존한다. */
+function writeFmScalar(frontmatter: string, key: string, value: string): string {
+  const line = `${key}: "${value.replace(/"/g, '\\"')}"`;
+  const re = new RegExp(`^${key}:\\s*.*$`, 'm');
+  if (re.test(frontmatter)) {
+    return value.trim()
+      ? frontmatter.replace(re, line)
+      : frontmatter.replace(new RegExp(`^${key}:\\s*.*\\r?\\n`, 'm'), '');
+  }
+  if (!value.trim()) return frontmatter;
+  return frontmatter.replace(/^(name:\s*.*)$/m, `$1\n${line}`);
+}
+
+/** frontmatter 원문에서 requiredFields 목록을 읽는다. */
+function readFmRequiredFields(frontmatter: string): string[] {
+  const block = /^requiredFields:\s*\n((?:\s*-\s*.*\n?)*)/m.exec(frontmatter);
+  if (!block) return [];
+  return [...block[1].matchAll(/-\s*["']?([^"'\n]+)["']?/g)].map((m) => m[1].trim());
 }
 
 type ViewMode = 'list' | 'editor' | 'preview';
@@ -39,7 +74,7 @@ export default function Templates() {
   const [view, setView] = useState<ViewMode>('list');
   const [editingName, setEditingName] = useState<string | null>(null);
   const [editingContent, setEditingContent] = useState('');
-  const [editMode, setEditMode] = useState<'source' | 'wysiwyg'>('source');
+  const [editMode, setEditMode] = useState<'source' | 'wysiwyg'>('wysiwyg');
   const [newTemplateName, setNewTemplateName] = useState('');
   const [wysiwygHtml, setWysiwygHtml] = useState('');
   const [isNewTemplate, setIsNewTemplate] = useState(false);
@@ -64,12 +99,15 @@ export default function Templates() {
     }
   };
 
+  /** 편집 진입은 WYSIWYG가 기본 (이슈 #23 1-3.1). frontmatter는 editingContent에
+   *  원문 그대로 보존하고, body만 칩으로 변환해 에디터에 싣는다. */
   const handleEdit = async (name: string) => {
     try {
       const response = await api.get(`/api/templates/${name}`);
+      const raw = response.data.raw || '';
       setEditingName(name);
-      setEditingContent(response.data.raw || '');
-      setEditMode('source');
+      applyEditorRaw(raw);
+      setEditMode('wysiwyg');
       setIsNewTemplate(false);
       setView('editor');
     } catch (error) {
@@ -77,24 +115,27 @@ export default function Templates() {
     }
   };
 
-  const handleNew = () => {
+  /** 신규 생성도 WYSIWYG로 진입하고, 골격은 기준 템플릿을 시드로 복제한다
+   *  (이슈 #23 1-3.1·1-3.2). 시드의 frontmatter name은 저장 시 새 이름으로 교체된다. */
+  const applyEditorRaw = (raw: string) => {
+    setEditingContent(raw);
+    setWysiwygHtml(bodyToEditable(splitRaw(raw).body));
+  };
+
+  const handleNew = async () => {
     setEditingName(null);
     setNewTemplateName('');
-    setEditingContent(`---
-name: "new-template"
-platforms: ["tistory"]
-requiredFields:
-  - "productName"
-seo:
-  titleTemplate: "{{productName}} 추천"
----
-
-<div>
-<h1>{{productName}}</h1>
-</div>`);
-    setEditMode('source');
     setIsNewTemplate(true);
+    setEditMode('wysiwyg');
+    const skeleton = `---\nname: "new-template"\nplatforms: ["naver"]\nrequiredFields:\n  - "productName"\nseo:\n  titleTemplate: "{{productName}} 추천"\n---\n\n<div>\n<h1>{{productName}}</h1>\n</div>`;
+    applyEditorRaw(skeleton);
     setView('editor');
+    try {
+      const response = await api.get(`/api/templates/${SEED_TEMPLATE}`);
+      if (response.data.raw) applyEditorRaw(response.data.raw);
+    } catch (error) {
+      console.error('Failed to load seed template, keeping minimal skeleton:', error);
+    }
   };
 
   /** WYSIWYG → 소스 전환: 프론트매터 보존 + 편집된 body 반영 */
@@ -115,11 +156,16 @@ seo:
     try {
       if (isNewTemplate) {
         if (!newTemplateName.trim()) return;
-        const content =
-          editMode === 'wysiwyg'
-            ? splitRaw(editingContent).frontmatter + editableToHbsBody(wysiwygHtml)
-            : editingContent;
-        await api.post('/api/templates', { name: newTemplateName.trim(), content });
+        const name = newTemplateName.trim();
+        const body =
+          editMode === 'wysiwyg' ? editableToHbsBody(wysiwygHtml) : splitRaw(editingContent).body;
+        // 시드 복제분의 frontmatter name/displayName을 새 이름 기준으로 정리한다
+        // (식별자 name은 파일명과 API 경로로 계속 쓰이므로 파일명과 일치해야 한다).
+        const frontmatter = splitRaw(editingContent).frontmatter.replace(
+          /^name:\s*.*$/m,
+          `name: "${name}"`,
+        );
+        await api.post('/api/templates', { name, content: frontmatter + body });
       } else if (editingName) {
         const content =
           editMode === 'wysiwyg'
@@ -208,7 +254,7 @@ seo:
                   <div className="flex items-center gap-2">
                     <FileCode className="h-5 w-5 text-primary shrink-0" />
                     <div className="min-w-0">
-                      <h3 className="font-semibold truncate">{t.name}</h3>
+                      <h3 className="font-semibold truncate">{t.displayName || t.name}</h3>
                       <Badge variant="outline" className="mt-1">
                         {t.filename}
                       </Badge>
@@ -216,6 +262,9 @@ seo:
                   </div>
                 </CardHeader>
                 <CardContent className="space-y-3 pb-4">
+                  {t.description && (
+                    <p className="text-xs text-muted-foreground">{t.description}</p>
+                  )}
                   {t.platforms?.length > 0 && (
                     <div className="flex flex-wrap gap-1">
                       {t.platforms.map((p) => (
@@ -233,8 +282,9 @@ seo:
                           <span
                             key={f}
                             className="inline-block px-2 py-0.5 rounded bg-muted text-xs"
+                            title={f}
                           >
-                            {f}
+                            {labelForTemplateField(f)}
                           </span>
                         ))}
                         {t.requiredFields.length > 5 && (
@@ -382,6 +432,58 @@ seo:
         </Card>
       )}
 
+      {/* frontmatter는 WYSIWYG 대상이 아니므로 별도 폼으로 편집한다 (이슈 #23 1-3.3).
+          식별자 name/플랫폼/SEO 등 나머지는 고급(소스) 모드에서 다룬다. */}
+      <Card>
+        <CardContent className="p-4 space-y-3">
+          <p className="text-sm font-medium">템플릿 정보</p>
+          <div className="grid gap-3 sm:grid-cols-2">
+            <div>
+              <label className="block text-xs text-muted-foreground mb-1">표시 이름 (한국어)</label>
+              <Input
+                placeholder="예: 네이버 쿠팡 리뷰"
+                value={readFmScalar(splitRaw(editingContent).frontmatter, 'displayName')}
+                onChange={(e) => {
+                  const { frontmatter, body } = splitRaw(editingContent);
+                  setEditingContent(
+                    writeFmScalar(frontmatter, 'displayName', e.target.value) + body,
+                  );
+                }}
+              />
+            </div>
+            <div>
+              <label className="block text-xs text-muted-foreground mb-1">설명</label>
+              <Input
+                placeholder="한 줄 설명"
+                value={readFmScalar(splitRaw(editingContent).frontmatter, 'description')}
+                onChange={(e) => {
+                  const { frontmatter, body } = splitRaw(editingContent);
+                  setEditingContent(
+                    writeFmScalar(frontmatter, 'description', e.target.value) + body,
+                  );
+                }}
+              />
+            </div>
+          </div>
+          {readFmRequiredFields(splitRaw(editingContent).frontmatter).length > 0 && (
+            <div>
+              <p className="text-xs text-muted-foreground mb-1">필수 필드</p>
+              <div className="flex flex-wrap gap-1">
+                {readFmRequiredFields(splitRaw(editingContent).frontmatter).map((f) => (
+                  <span
+                    key={f}
+                    className="inline-block px-2 py-0.5 rounded bg-muted text-xs"
+                    title={f}
+                  >
+                    {labelForTemplateField(f)}
+                  </span>
+                ))}
+              </div>
+            </div>
+          )}
+        </CardContent>
+      </Card>
+
       <Card>
         <CardContent className="p-4 space-y-4">
           <div className="flex items-center gap-1">
@@ -390,10 +492,10 @@ seo:
               size="sm"
               onClick={switchToSource}
               disabled={editMode === 'source'}
-              title="frontmatter/Handlebars 소스 편집"
+              title="토큰 칩으로 표현되지 않는 편집(주석·복잡한 블록 헬퍼)을 위한 고급 모드"
             >
               <Code2 className="mr-1 h-4 w-4" />
-              소스
+              고급(소스)
             </Button>
             <Button
               variant={editMode === 'wysiwyg' ? 'default' : 'outline'}
@@ -421,7 +523,7 @@ seo:
             <p className="text-xs text-muted-foreground">
               {editMode === 'source'
                 ? 'Handlebars 문법 지원: {{#each}}, {{#if}}, {{formatPrice price}} 등'
-                : '위젯 버튼으로 커서 위치에 쿠팡 위젯을 삽입할 수 있습니다. frontmatter는 소스 모드에서 편집하세요.'}
+                : '본문을 필드가 아닌 WYSIWYG로 편집합니다. 표시 이름·설명은 위 “템플릿 정보” 폼에서, 나머지 frontmatter는 고급(소스) 모드에서 편집하세요.'}
             </p>
             <Button onClick={handleSave} disabled={saving}>
               {saving ? (

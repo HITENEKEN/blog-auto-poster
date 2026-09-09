@@ -180,6 +180,10 @@ export interface TemplateRenderResult {
 
 export interface TemplateFrontmatter {
   name: string;
+  /** 사용자 화면용 한국어 이름. 없으면 `name`(파일명 겸 식별자)을 그대로 표시한다. */
+  displayName?: string;
+  /** 템플릿 용도 한 줄 설명 (한국어). 목록/편집 화면 보조 텍스트. */
+  description?: string;
   platforms: string[];
   requiredFields: string[];
   optionalFields?: string[];

@@ -16,6 +16,13 @@ test.describe('posts', () => {
     await expect(page.getByText('포스트가 없습니다.')).toBeVisible();
     await expect(page.getByRole('row')).toHaveCount(0);
 
+    // 이슈 #24 2-2: 동작하지 않던 필터 3종(상태/플랫폼/템플릿)을 제거하고 2-3의 검색 UI로 교체.
+    // 빈 Select 박스(combobox)가 남아 있지 않고, 제목/발행날짜 검색이 대신 놓인다.
+    await expect(page.getByRole('combobox')).toHaveCount(0);
+    await expect(page.getByPlaceholder('템플릿 검색')).toHaveCount(0);
+    await expect(page.getByPlaceholder('제목 일부')).toBeVisible();
+    await expect(page.locator('input[type="date"]')).toHaveCount(2);
+
     // API wrapper check: { posts: [], total: 0 }.
     const token = await getAuthToken(page);
     const res = await page.request.get('/api/posts', { headers: authHeaders(token) });
@@ -24,6 +31,21 @@ test.describe('posts', () => {
     expect(Array.isArray(body.posts)).toBe(true);
     expect(body.posts).toHaveLength(0);
     expect(body.total).toBe(0);
+
+    // 이슈 #24 2-1/2-3: GET /api/posts가 title/offset 파라미터를 받아 래퍼로 되돌린다.
+    const search = await page.request.get('/api/posts?title=존재하지않는제목zzz&offset=40', {
+      headers: authHeaders(token),
+    });
+    expect(search.ok()).toBeTruthy();
+    const searchBody = (await search.json()) as { posts: unknown[]; offset: number };
+    expect(searchBody.posts).toHaveLength(0);
+    expect(searchBody.offset).toBe(40);
+
+    // DELETE /api/posts/:id — 존재하지 않는 id는 404.
+    const del = await page.request.delete('/api/posts/no-such-post-id', {
+      headers: authHeaders(token),
+    });
+    expect(del.status()).toBe(404);
   });
 
   // Plan Verification 2 — full keyword→draft flow on the fallback path

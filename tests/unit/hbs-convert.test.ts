@@ -1,12 +1,13 @@
 import { describe, expect, it } from 'vitest';
-import { readFileSync } from 'node:fs';
+import Handlebars from 'handlebars';
+import { readFileSync, readdirSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { bodyToEditable, editableToHbsBody, splitRaw } from '../../src/web/shared/hbsConvert';
 
-const raw = readFileSync(
-  fileURLToPath(new URL('../../templates/coupang-product-review.hbs', import.meta.url)),
-  'utf8',
-);
+const templatesDir = fileURLToPath(new URL('../../templates', import.meta.url));
+const templateFiles = readdirSync(templatesDir).filter((f) => f.endsWith('.hbs'));
+
+const raw = readFileSync(`${templatesDir}/coupang-product-review.hbs`, 'utf8');
 
 describe('hbsConvert — real template round-trip', () => {
   const { frontmatter, body } = splitRaw(raw);
@@ -49,5 +50,29 @@ describe('hbsConvert — attribute token preservation', () => {
     // 텍스트 노드의 토큰만 칩이 된다
     expect(editable).toContain(`data-hbs-token="${encodeURIComponent('{{text}}')}"`);
     expect(editableToHbsBody(editable)).toBe(tag);
+  });
+});
+
+// 이슈 #23 1-1/1-3.5: 전 템플릿(6종)에 대해 왕복 무손실 + 저장 전 컴파일 검증.
+describe('hbsConvert — 전체 템플릿 왕복 + 저장 검증', () => {
+  it.each(templateFiles)(
+    '%s body가 bodyToEditable→editableToHbsBody 왕복에서 무손실이다',
+    (file) => {
+      const { body } = splitRaw(readFileSync(`${templatesDir}/${file}`, 'utf8'));
+      expect(editableToHbsBody(bodyToEditable(body))).toBe(body);
+    },
+  );
+
+  it.each(templateFiles)(
+    '%s의 editableToHbsBody 출력이 Handlebars.precompile을 통과한다',
+    (file) => {
+      const { body } = splitRaw(readFileSync(`${templatesDir}/${file}`, 'utf8'));
+      const restored = editableToHbsBody(bodyToEditable(body));
+      expect(() => Handlebars.precompile(restored)).not.toThrow();
+    },
+  );
+
+  it('깨진 Handlebars(블록 미종결)는 precompile이 거부한다', () => {
+    expect(() => Handlebars.precompile('<div>{{#if x}}<p>no close</div>')).toThrow();
   });
 });

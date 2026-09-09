@@ -230,6 +230,8 @@ type PublishAttempt = {
 // Frontmatter fields consumed by the templates API (YAML is user-authored, all optional).
 interface TemplateFrontmatter {
   name?: string;
+  displayName?: string;
+  description?: string;
   platforms?: string[];
   requiredFields?: string[];
   optionalFields?: string[];
@@ -961,6 +963,7 @@ export async function registerRoutes(app: FastifyInstance, context: RouteContext
     const {
       status,
       platform,
+      title,
       limit = '50',
       offset = '0',
       fromDate,
@@ -968,21 +971,23 @@ export async function registerRoutes(app: FastifyInstance, context: RouteContext
     } = request.query as {
       status?: string;
       platform?: string;
+      title?: string;
       limit?: string;
       offset?: string;
       fromDate?: string;
       toDate?: string;
     };
 
+    // 제목 검색(부분일치) + 실제 offset 전달 (이슈 #24 2-2·2-3).
+    // 기존엔 offset이 파싱만 되고 쿼리에 안 붙어 2페이지가 1페이지와 동일했다.
+    const commonFilters = { status, platform, title, fromDate, toDate };
     const posts = jobQueue.getPublishedPosts({
-      status,
-      platform,
-      fromDate,
-      toDate,
+      ...commonFilters,
       limit: parseInt(limit),
+      offset: parseInt(offset) || 0,
     });
 
-    const total = jobQueue.getPublishedPosts({ status, platform, fromDate, toDate }).length;
+    const total = jobQueue.getPublishedPosts(commonFilters).length;
 
     return {
       posts: posts.map((p) => {
@@ -1187,24 +1192,62 @@ export async function registerRoutes(app: FastifyInstance, context: RouteContext
 
   app.delete('/api/posts/:id', async (request, reply) => {
     const { id } = request.params as { id: string };
+    const { confirm } = request.query as { confirm?: string };
+
+    // 포스트 기록은 두 곳에 나뉜다 (이슈 #24 2-1):
+    //  - 드래프트 파일: output/posts/<id>/
+    //  - 발행 기록: data/jobs.sqlite published_posts (행 id = pub-<platform>-<postId>)
     const files = readPostFiles(id);
-    if (!files) {
+    const publishedRow = jobQueue.getPublishedPostById(id);
+    if (!files && !publishedRow) {
       return reply.code(404).send({ error: 'Post not found' });
     }
-    // 게시된 포스트는 삭제 대상이 아니다 — publish 성공 시 meta.status가 'PUBLISHED'로 기록된다.
-    if (files.meta.status !== 'DRAFT') {
-      return reply.code(400).send({ error: 'Published posts cannot be deleted' });
+
+    // 발행 완료 포스트는 실수 삭제 방지를 위해 명시적 확인을 요구한다.
+    // (실패 레코드는 오류 기록이므로 확인 없이 삭제 허용)
+    const isPublished =
+      publishedRow?.status === 'published' || (!!files && files.meta.status !== 'DRAFT');
+    if (isPublished && confirm !== 'published') {
+      return reply.code(400).send({
+        error: 'Published posts require ?confirm=published',
+        requiresConfirm: true,
+        // 네이버 등은 삭제 API가 없어 로컬 기록만 지운다 — 원문 링크를 함께 돌려준다.
+        externalUrl: publishedRow?.url ?? null,
+      });
     }
-    // generating 중이면 백그라운드 생성을 취소 표시한다 — 작업이 완료 시점에 도달해도
-    // 저장하지 않으므로 삭제된 디렉터리가 부활하지 않는다.
-    if (files.meta.generationStatus === 'generating') {
+
+    // generating 중이면 백그라운드 생성을 취소 표시한다(디렉터리 부활 방지).
+    if (files?.meta.generationStatus === 'generating') {
       cancelledGenerations.add(id);
     }
-    if (!deleteDraftFiles(id)) {
+
+    // 드래프트 디렉터리: id가 곧 디렉터리이거나(파일 존재), 발행 행의 metadata.draftId.
+    let draftDirId: string | null = files ? id : null;
+    if (!draftDirId && publishedRow?.metadata) {
+      try {
+        draftDirId = (JSON.parse(publishedRow.metadata) as { draftId?: string }).draftId ?? null;
+      } catch {
+        draftDirId = null;
+      }
+    }
+
+    const removedDraft = draftDirId ? deleteDraftFiles(draftDirId) : false;
+    const removedRow = publishedRow ? jobQueue.deletePublishedPost(id) : 0;
+
+    if (!removedDraft && !removedRow) {
       return reply.code(400).send({ error: 'Invalid post id' });
     }
-    logger.info({ postId: id, cancelled: cancelledGenerations.has(id) }, 'Draft deleted');
-    return { success: true };
+    logger.info(
+      {
+        postId: id,
+        removedDraft,
+        removedRow,
+        isPublished,
+        cancelled: cancelledGenerations.has(id),
+      },
+      'Post deleted',
+    );
+    return { success: true, removedDraft, removedRow };
   });
 
   app.post('/api/posts/:id/ai-edit', async (request, reply) => {
@@ -1627,6 +1670,33 @@ export async function registerRoutes(app: FastifyInstance, context: RouteContext
     }
   };
 
+  /**
+   * 저장 전 템플릿 무결성 검사 (이슈 #23 1-3.5).
+   *
+   * `POST/PUT /api/templates`가 컴파일 검사 없이 파일에 그대로 쓰던 탓에 깨진
+   * 템플릿이 발행 시점에야 터졌다(edb0c32의 Missing helper 사고와 같은 부류).
+   * frontmatter가 있으면 YAML이 유효한지, 그리고 본문이 Handlebars.precompile을
+   * 통과하는지(블록 미종결 등 파싱 오류가 없는지)를 저장 전에 막는다.
+   */
+  const validateTemplateContent = async (content: string): Promise<string | null> => {
+    const fmMatch = content.match(/^---\n([\s\S]*?)\n---\n([\s\S]*)$/);
+    if (fmMatch) {
+      try {
+        yaml.load(fmMatch[1]);
+      } catch (e) {
+        return `frontmatter YAML 파싱 실패: ${String(e)}`;
+      }
+    }
+    const body = fmMatch ? fmMatch[2] : content;
+    try {
+      const Handlebars = (await import('handlebars')).default;
+      Handlebars.precompile(body);
+    } catch (e) {
+      return `Handlebars 컴파일 실패: ${e instanceof Error ? e.message : String(e)}`;
+    }
+    return null;
+  };
+
   app.get('/api/templates', async () => {
     if (!fs.existsSync(templatesDir)) return { templates: [] };
     const files = fs.readdirSync(templatesDir).filter((f) => f.endsWith('.hbs'));
@@ -1637,6 +1707,9 @@ export async function registerRoutes(app: FastifyInstance, context: RouteContext
       return {
         filename,
         name: parsed.frontmatter.name || filename.replace('.hbs', ''),
+        // 화면 표시용 한국어 이름/설명 (이슈 #23 1-2). 없으면 식별자 name으로 폴백.
+        displayName: parsed.frontmatter.displayName || '',
+        description: parsed.frontmatter.description || '',
         platforms: parsed.frontmatter.platforms || [],
         requiredFields: parsed.frontmatter.requiredFields || [],
         optionalFields: parsed.frontmatter.optionalFields || [],
@@ -1660,24 +1733,28 @@ export async function registerRoutes(app: FastifyInstance, context: RouteContext
     };
   });
 
-  app.post('/api/templates', async (request) => {
+  app.post('/api/templates', async (request, reply) => {
     const { name, content } = request.body as { name?: string; content?: string };
-    if (!name || !content) return { error: 'name and content required' };
+    if (!name || !content) return reply.code(400).send({ error: 'name and content required' });
     const safeName = name.replace(/[^a-zA-Z0-9-_]/g, '');
     const filepath = path.join(templatesDir, `${safeName}.hbs`);
-    if (fs.existsSync(filepath)) return { error: 'Template already exists' };
+    if (fs.existsSync(filepath)) return reply.code(409).send({ error: 'Template already exists' });
+    const invalid = await validateTemplateContent(content);
+    if (invalid) return reply.code(400).send({ error: invalid });
     fs.writeFileSync(filepath, content);
     logger.info({ templateName: safeName }, 'Template created');
     return { success: true, name: safeName };
   });
 
-  app.put('/api/templates/:name', async (request) => {
+  app.put('/api/templates/:name', async (request, reply) => {
     const { name } = request.params as { name: string };
     const { content } = request.body as { content?: string };
-    if (!content) return { error: 'content required' };
+    if (!content) return reply.code(400).send({ error: 'content required' });
     const safeName = name.replace(/[^a-zA-Z0-9-_]/g, '');
     const filepath = path.join(templatesDir, `${safeName}.hbs`);
-    if (!fs.existsSync(filepath)) return { error: 'Template not found' };
+    if (!fs.existsSync(filepath)) return reply.code(404).send({ error: 'Template not found' });
+    const invalid = await validateTemplateContent(content);
+    if (invalid) return reply.code(400).send({ error: invalid });
     fs.writeFileSync(filepath, content);
     logger.info({ templateName: safeName }, 'Template updated');
     return { success: true, name: safeName };

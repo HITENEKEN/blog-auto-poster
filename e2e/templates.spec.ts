@@ -15,33 +15,140 @@ test.describe('templates', () => {
   test.beforeEach(async ({ page }) => {
     await login(page);
     await page.goto('/templates');
-    // Templates.tsx:153 — <h1>템플릿 관리</h1>
+    // Templates.tsx — <h1>템플릿 관리</h1>
     await expect(page.getByRole('heading', { level: 1, name: '템플릿 관리' })).toBeVisible();
   });
 
-  // List view renders each template card with a filename Badge (Templates.tsx:183-185).
-  test('lists seeded templates from templates dir', async ({ page }) => {
+  // List view renders each template card + 이슈 #23 1-2: 한국어 표시 이름·필드 라벨,
+  // and the coupang-product-review preview carries the affiliate disclosure with
+  // no unimplemented stub text (이슈 #23 1-1).
+  test('lists seeded templates with Korean display names, labels, disclosure', async ({ page }) => {
     for (const filename of SEED_FILENAMES) {
       await expect(page.getByText(filename, { exact: true })).toBeVisible();
     }
+    // naver-coupang-review.hbs frontmatter displayName: "네이버 쿠팡 리뷰"
+    await expect(
+      page.getByRole('heading', { name: '네이버 쿠팡 리뷰', exact: true }),
+    ).toBeVisible();
+    // requiredFields productName / conclusion → 한국어 라벨 (templateFieldLabels.ts)
+    const card = page.locator('div.grid > div', { hasText: 'naver-coupang-review.hbs' }).first();
+    await expect(card.getByText('상품명', { exact: true })).toBeVisible();
+    await expect(card.getByText('총평', { exact: true })).toBeVisible();
+
+    const token = await getAuthToken(page);
+    const res = await page.request.post('/api/templates/coupang-product-review/preview', {
+      headers: authHeaders(token),
+      data: {},
+    });
+    expect(res.ok()).toBeTruthy();
+    const body = (await res.json()) as { html?: string; error?: string };
+    expect(body.error).toBeUndefined();
+    expect(body.html).toContain('쿠팡 파트너스');
+    expect(body.html).not.toContain('향후 구현 예정');
   });
 
-  // Create via UI (POST /api/templates, Templates.tsx:97), preview via UI
-  // (POST /api/templates/:name/preview, :138), delete via UI (DELETE, :113),
-  // then verify removal through GET /api/templates.
-  test('creates, previews, then deletes a template', async ({ page }) => {
+  // 이슈 #23 1-3.1·1-3.2: 편집/신규 진입 모두 WYSIWYG가 기본이고 {{토큰}}이 칩으로 렌더된다.
+  test('editor defaults to WYSIWYG for both edit and new', async ({ page }) => {
+    // --- edit an existing template ---
+    const card = page.locator('div.grid > div', { hasText: 'naver-coupang-review.hbs' }).first();
+    await card.getByRole('button', { name: '편집' }).click();
+    await expect(page.getByRole('heading', { name: /편집: naver-coupang-review/ })).toBeVisible();
+    await expect(page.locator('.ProseMirror[contenteditable="true"]')).toBeVisible();
+    // source textarea is NOT the primary path
+    await expect(page.locator('textarea')).toHaveCount(0);
+    // Handlebars tokens render as non-editable atom chips showing the raw {{...}}.
+    await expect(page.locator('.ProseMirror')).toContainText('{{productName}}');
+    await expect(page.locator('.ProseMirror span[contenteditable="false"]').first()).toBeVisible();
+    // frontmatter form prefilled with the Korean displayName
+    await expect(page.getByPlaceholder('예: 네이버 쿠팡 리뷰')).toHaveValue('네이버 쿠팡 리뷰');
+
+    // --- new template: WYSIWYG + seeded from the base template (총평 section) ---
+    await page.getByRole('button', { name: '취소' }).click();
+    await page.getByRole('button', { name: '새 템플릿' }).click();
+    await expect(page.getByRole('heading', { name: '새 템플릿' })).toBeVisible();
+    await expect(page.locator('.ProseMirror[contenteditable="true"]')).toBeVisible();
+    await expect(page.locator('.ProseMirror')).toContainText('총평', { timeout: 10_000 });
+  });
+
+  // 이슈 #23 1-3: WYSIWYG 수정 → 저장 → 재진입 시 내용 보존(왕복 회귀) +
+  // 저장 전 컴파일 검증(1-3.5): 깨진 Handlebars는 400으로 거부된다.
+  test('WYSIWYG edit round-trips through save; broken Handlebars is rejected', async ({ page }) => {
+    test.setTimeout(60_000);
+    const token = await getAuthToken(page);
+
+    // precompile guard: unclosed block → 400
+    const broken = await page.request.post('/api/templates', {
+      headers: authHeaders(token),
+      data: {
+        name: `e2e-broken-${Date.now()}`,
+        content: '---\nname: "x"\n---\n<div>{{#if x}}<p>no close</div>',
+      },
+    });
+    expect(broken.status()).toBe(400);
+    expect(((await broken.json()) as { error?: string }).error).toMatch(
+      /컴파일 실패|precompile|Handlebars/i,
+    );
+
+    // round-trip
+    const name = `e2e-rt-${Date.now()}`;
+    const raw = [
+      '---',
+      `name: "${name}"`,
+      'displayName: "왕복 테스트"',
+      'platforms: ["naver"]',
+      'requiredFields:',
+      '  - "productName"',
+      'seo:',
+      '  titleTemplate: "{{productName}} 추천"',
+      '---',
+      '',
+      '<div class="rt"><h2>총평</h2><p>{{productName}} 기본 문구</p></div>',
+      '',
+    ].join('\n');
+    const create = await page.request.post('/api/templates', {
+      headers: authHeaders(token),
+      data: { name, content: raw },
+    });
+    expect(create.ok()).toBeTruthy();
+
+    await page.reload();
+    const card = page.locator('div.grid > div', { hasText: `${name}.hbs` }).first();
+    await card.getByRole('button', { name: '편집' }).click();
+    const editor = page.locator('.ProseMirror[contenteditable="true"]');
+    await expect(editor).toContainText('기본 문구');
+
+    await editor.getByText('기본 문구').click();
+    await page.keyboard.press('End');
+    await page.keyboard.type(' 편집됨');
+    await expect(editor).toContainText('기본 문구 편집됨');
+    await page.getByRole('button', { name: '저장' }).click();
+    await expect(page.getByRole('heading', { level: 1, name: '템플릿 관리' })).toBeVisible();
+
+    await card.getByRole('button', { name: '편집' }).click();
+    const editor2 = page.locator('.ProseMirror[contenteditable="true"]');
+    await expect(editor2).toContainText('편집됨');
+    await expect(editor2).toContainText('{{productName}}');
+
+    const res = await page.request.get(`/api/templates/${name}`, { headers: authHeaders(token) });
+    const stored = (await res.json()) as { raw: string };
+    expect(stored.raw).toContain('{{productName}}');
+    expect(stored.raw).toContain('편집됨');
+
+    await page.request.delete(`/api/templates/${name}`, { headers: authHeaders(token) });
+  });
+
+  // Create via UI advanced (source) mode, preview, then delete.
+  test('creates via advanced source mode, previews, then deletes a template', async ({ page }) => {
     test.setTimeout(60_000);
     const name = `e2e-template-${Date.now()}`;
 
-    // --- Create (editor view) ---
-    await page.getByRole('button', { name: '새 템플릿' }).click(); // Templates.tsx:156-158
-    await expect(page.getByRole('heading', { name: '새 템플릿' })).toBeVisible(); // :333-336
-    const nameInput = page.getByPlaceholder('my-custom-template'); // :347-351
-    await nameInput.fill(name); // input sanitizes to [a-zA-Z0-9-_] — our name is safe
-    // Replace the default body: the frontmatter name MUST match the created
-    // filename, because the preview button calls POST /api/templates/<frontmatter
-    // name>/preview (Templates.tsx:134-138 — it uses t.name, not the filename;
-    // the default "new-template" frontmatter would point at a nonexistent file).
+    await page.getByRole('button', { name: '새 템플릿' }).click();
+    await expect(page.getByRole('heading', { name: '새 템플릿' })).toBeVisible();
+    await page.getByPlaceholder('my-custom-template').fill(name);
+
+    // Reveal the raw editor — frontmatter `name` must match the created filename
+    // (the preview button calls POST /api/templates/<frontmatter name>/preview).
+    await page.getByRole('button', { name: '고급(소스)' }).click();
     await page
       .locator('textarea')
       .fill(
@@ -57,51 +164,29 @@ test.describe('templates', () => {
           '',
         ].join('\n'),
       );
-    await page.getByRole('button', { name: '저장' }).click(); // :369-376
-    // Back on list view; the new card shows its filename Badge (:183-185).
+    await page.getByRole('button', { name: '저장' }).click();
     const badge = page.getByText(`${name}.hbs`, { exact: true });
     await expect(badge).toBeVisible();
     const card = page.locator('div.grid > div', { hasText: name }).first();
-    await card.getByRole('button', { name: '미리보기' }).click(); // :220-228
-    await expect(page.getByRole('heading', { name: `미리보기: ${name}` })).toBeVisible(); // :273-276
-    const frameBody = page.frameLocator('iframe[srcdoc]').locator('body'); // :315-320
+    await card.getByRole('button', { name: '미리보기' }).click();
+    await expect(page.getByRole('heading', { name: `미리보기: ${name}` })).toBeVisible();
+    const frameBody = page.frameLocator('iframe[srcdoc]').locator('body');
     await expect(frameBody).toContainText('무선 청소기 프리미엄', { timeout: 20_000 });
-    await page.getByRole('button', { name: '닫기' }).click(); // :292-295
+    await page.getByRole('button', { name: '닫기' }).click();
     await expect(badge).toBeVisible();
 
-    // --- Delete (Templates.tsx:110-118 uses window.confirm — accept it) ---
     page.once('dialog', (dialog) => dialog.accept());
-    await card.getByRole('button', { name: '삭제', exact: true }).click(); // :248-256
+    await card.getByRole('button', { name: '삭제', exact: true }).click();
     await expect(badge).toBeHidden();
 
-    // GET /api/templates must no longer contain the template.
     const token = await getAuthToken(page);
     const res = await page.request.get('/api/templates', { headers: authHeaders(token) });
     expect(res.ok()).toBeTruthy();
     const body = (await res.json()) as { templates: Array<{ name?: string; filename?: string }> };
     const stillThere = body.templates.some((t) => t.name === name || t.filename === `${name}.hbs`);
     expect(stillThere).toBe(false);
-    // Seed templates untouched.
     for (const filename of SEED_FILENAMES) {
       expect(body.templates.some((t) => t.filename === filename)).toBe(true);
     }
-  });
-
-  // Plan Verification 2: coupang-product-review.hbs must carry the affiliate
-  // disclosure (쿠팡 파트너스) at the top of its body
-  // (templates/coupang-product-review.hbs:39-41). Checked on the raw preview
-  // response — the UI preview dialog (iframe srcdoc) renders the same html.
-  test('coupang-product-review preview response includes the affiliate disclosure', async ({
-    page,
-  }) => {
-    const token = await getAuthToken(page);
-    const res = await page.request.post('/api/templates/coupang-product-review/preview', {
-      headers: authHeaders(token),
-      data: {},
-    });
-    expect(res.ok()).toBeTruthy();
-    const body = (await res.json()) as { html?: string; error?: string };
-    expect(body.error).toBeUndefined();
-    expect(body.html).toContain('쿠팡 파트너스');
   });
 });
