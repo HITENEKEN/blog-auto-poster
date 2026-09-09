@@ -22,7 +22,7 @@ import {
   type ContentGeneratorConfig,
 } from '@content/ContentGenerator';
 import { fetchLlmModels } from '@content/LlmModels';
-import { createTemplateEngine } from '@content/TemplateEngine';
+import { createTemplateEngine, registerBuiltinTemplateHelpers } from '@content/TemplateEngine';
 import {
   resolveImageGenerator,
   resolveGeminiImageConfig,
@@ -1821,20 +1821,9 @@ export async function registerRoutes(app: FastifyInstance, context: RouteContext
       };
 
       const mergedData = { ...defaults, ...sampleData };
-      // Register helpers
-      Handlebars.registerHelper('formatPrice', (p: number) =>
-        typeof p === 'number' ? p.toLocaleString('ko-KR') : String(p),
-      );
-      Handlebars.registerHelper('renderStars', (r: number, max: number = 5) => {
-        const full = Math.floor(r);
-        let s = '★'.repeat(full);
-        if (r - full >= 0.5) s += '☆';
-        s += '☆'.repeat(max - full - (r - full >= 0.5 ? 1 : 0));
-        return s;
-      });
-      Handlebars.registerHelper('math', (a: number, op: string, b: number) =>
-        op === '+' ? a + b : a,
-      );
+      // 헬퍼는 전역 Handlebars 싱글턴에 등록되므로 발행 경로와 같은 정의를 공유한다.
+      // (여기서 따로 등록하면 프리뷰 호출 순서에 따라 발행 경로의 헬퍼를 덮어쓴다.)
+      registerBuiltinTemplateHelpers();
 
       const compiled = Handlebars.compile(templateBody);
       const html = compiled(mergedData);

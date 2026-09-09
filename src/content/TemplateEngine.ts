@@ -22,143 +22,160 @@ interface ParsedTemplate {
   rawContent: string;
 }
 
+/**
+ * Handlebars 헬퍼는 전역 싱글턴에 등록되므로 모듈 레벨에서 한 번만 등록한다.
+ * (이전에는 TemplateEngineImpl 인스턴스 플래그로 관리하고 `math`는 프리뷰
+ *  라우트에서만 등록해, 프리뷰를 거치지 않은 초안 생성이 Missing helper로 실패했다.)
+ */
+let builtinHelpersRegistered = false;
+
+export function registerBuiltinTemplateHelpers(): void {
+  if (builtinHelpersRegistered) return;
+
+  // Format price with Korean won formatting
+  Handlebars.registerHelper('formatPrice', (price: number): string => {
+    if (typeof price !== 'number') return String(price);
+    return price.toLocaleString('ko-KR');
+  });
+
+  // Truncate text to specified length
+  Handlebars.registerHelper(
+    'truncate',
+    (text: string, length: number, suffix: string = '...'): string => {
+      if (!text || text.length <= length) return text || '';
+      return text.substring(0, length - suffix.length) + suffix;
+    },
+  );
+
+  // Render stars for rating
+  Handlebars.registerHelper('renderStars', (rating: number, maxStars: number = 5): string => {
+    const fullStars = Math.floor(rating);
+    const hasHalfStar = rating - fullStars >= 0.5;
+    const emptyStars = maxStars - fullStars - (hasHalfStar ? 1 : 0);
+
+    let stars = '★'.repeat(fullStars);
+    if (hasHalfStar) stars += '☆';
+    stars += '☆'.repeat(emptyStars);
+    return stars;
+  });
+
+  // SEO keywords extraction
+  Handlebars.registerHelper(
+    'seoKeywords',
+    (data: TemplateData, maxKeywords: number = 10): string => {
+      const keywords: string[] = [];
+
+      if (data.productName) keywords.push(String(data.productName));
+      if (data.categoryName) keywords.push(String(data.categoryName));
+      if (data.brand) keywords.push(String(data.brand));
+      if (data.tags && Array.isArray(data.tags)) {
+        keywords.push(...data.tags.map(String));
+      }
+
+      // Add default keywords
+      keywords.push('리뷰', '추천', '가성비', '후기');
+
+      const unique = [...new Set(keywords)];
+      return unique.slice(0, maxKeywords).join(', ');
+    },
+  );
+
+  // Affiliate link formatter
+  Handlebars.registerHelper(
+    'affiliateLink',
+    (url: string, text: string, subId?: string): string => {
+      if (!url) return text;
+      const separator = url.includes('?') ? '&' : '?';
+      const finalUrl = subId ? `${url}${separator}subId=${subId}` : url;
+      return `<a href="${finalUrl}" target="_blank" rel="nofollow sponsored">${text}</a>`;
+    },
+  );
+
+  // Format date
+  Handlebars.registerHelper(
+    'formatDate',
+    (date: string | Date, format: string = 'YYYY-MM-DD'): string => {
+      const d = new Date(date);
+      if (isNaN(d.getTime())) return '';
+      const year = d.getFullYear();
+      const month = String(d.getMonth() + 1).padStart(2, '0');
+      const day = String(d.getDate()).padStart(2, '0');
+      return format.replace('YYYY', String(year)).replace('MM', month).replace('DD', day);
+    },
+  );
+
+  // Conditional helper
+  Handlebars.registerHelper(
+    'ifEq',
+    function (this: HandlebarsContext, a: unknown, b: unknown, options: HandlebarsOptions): string {
+      return a === b ? options.fn!(this) : options.inverse!(this);
+    },
+  );
+
+  Handlebars.registerHelper(
+    'ifNe',
+    function (this: HandlebarsContext, a: unknown, b: unknown, options: HandlebarsOptions): string {
+      return a !== b ? options.fn!(this) : options.inverse!(this);
+    },
+  );
+
+  Handlebars.registerHelper(
+    'ifGt',
+    function (this: HandlebarsContext, a: number, b: number, options: HandlebarsOptions): string {
+      return a > b ? options.fn!(this) : options.inverse!(this);
+    },
+  );
+
+  Handlebars.registerHelper(
+    'ifLt',
+    function (this: HandlebarsContext, a: number, b: number, options: HandlebarsOptions): string {
+      return a < b ? options.fn!(this) : options.inverse!(this);
+    },
+  );
+
+  // JSON stringify for debugging
+  Handlebars.registerHelper('json', (context: unknown): string => {
+    return JSON.stringify(context, null, 2);
+  });
+
+  // Join array
+  Handlebars.registerHelper('join', (arr: unknown[], separator: string = ', '): string => {
+    if (!Array.isArray(arr)) return '';
+    return arr.join(separator);
+  });
+
+  // Arithmetic — 템플릿의 {{math @index "+" 1}} 같은 인덱스 계산용
+  Handlebars.registerHelper('math', (a: number, op: string, b: number): number => {
+    const left = Number(a);
+    const right = Number(b);
+    if (!Number.isFinite(left) || !Number.isFinite(right)) return NaN;
+    switch (op) {
+      case '+':
+        return left + right;
+      case '-':
+        return left - right;
+      case '*':
+        return left * right;
+      case '/':
+        return right === 0 ? NaN : left / right;
+      case '%':
+        return right === 0 ? NaN : left % right;
+      default:
+        return NaN;
+    }
+  });
+
+  builtinHelpersRegistered = true;
+}
+
 export class TemplateEngineImpl implements TemplateEngine {
   private templates = new Map<string, ParsedTemplate>();
   private compiledTemplates = new Map<string, HandlebarsTemplateDelegate>();
   private templatesDir: string;
-  private helpersRegistered = false;
 
   constructor(templatesDir: string = './templates') {
     this.templatesDir = templatesDir;
-    this.registerBuiltinHelpers();
-  }
-
-  private registerBuiltinHelpers(): void {
-    if (this.helpersRegistered) return;
-
-    // Format price with Korean won formatting
-    Handlebars.registerHelper('formatPrice', (price: number): string => {
-      if (typeof price !== 'number') return String(price);
-      return price.toLocaleString('ko-KR');
-    });
-
-    // Truncate text to specified length
-    Handlebars.registerHelper(
-      'truncate',
-      (text: string, length: number, suffix: string = '...'): string => {
-        if (!text || text.length <= length) return text || '';
-        return text.substring(0, length - suffix.length) + suffix;
-      },
-    );
-
-    // Render stars for rating
-    Handlebars.registerHelper('renderStars', (rating: number, maxStars: number = 5): string => {
-      const fullStars = Math.floor(rating);
-      const hasHalfStar = rating - fullStars >= 0.5;
-      const emptyStars = maxStars - fullStars - (hasHalfStar ? 1 : 0);
-
-      let stars = '★'.repeat(fullStars);
-      if (hasHalfStar) stars += '☆';
-      stars += '☆'.repeat(emptyStars);
-      return stars;
-    });
-
-    // SEO keywords extraction
-    Handlebars.registerHelper(
-      'seoKeywords',
-      (data: TemplateData, maxKeywords: number = 10): string => {
-        const keywords: string[] = [];
-
-        if (data.productName) keywords.push(String(data.productName));
-        if (data.categoryName) keywords.push(String(data.categoryName));
-        if (data.brand) keywords.push(String(data.brand));
-        if (data.tags && Array.isArray(data.tags)) {
-          keywords.push(...data.tags.map(String));
-        }
-
-        // Add default keywords
-        keywords.push('리뷰', '추천', '가성비', '후기');
-
-        const unique = [...new Set(keywords)];
-        return unique.slice(0, maxKeywords).join(', ');
-      },
-    );
-
-    // Affiliate link formatter
-    Handlebars.registerHelper(
-      'affiliateLink',
-      (url: string, text: string, subId?: string): string => {
-        if (!url) return text;
-        const separator = url.includes('?') ? '&' : '?';
-        const finalUrl = subId ? `${url}${separator}subId=${subId}` : url;
-        return `<a href="${finalUrl}" target="_blank" rel="nofollow sponsored">${text}</a>`;
-      },
-    );
-
-    // Format date
-    Handlebars.registerHelper(
-      'formatDate',
-      (date: string | Date, format: string = 'YYYY-MM-DD'): string => {
-        const d = new Date(date);
-        if (isNaN(d.getTime())) return '';
-        const year = d.getFullYear();
-        const month = String(d.getMonth() + 1).padStart(2, '0');
-        const day = String(d.getDate()).padStart(2, '0');
-        return format.replace('YYYY', String(year)).replace('MM', month).replace('DD', day);
-      },
-    );
-
-    // Conditional helper
-    Handlebars.registerHelper(
-      'ifEq',
-      function (
-        this: HandlebarsContext,
-        a: unknown,
-        b: unknown,
-        options: HandlebarsOptions,
-      ): string {
-        return a === b ? options.fn!(this) : options.inverse!(this);
-      },
-    );
-
-    Handlebars.registerHelper(
-      'ifNe',
-      function (
-        this: HandlebarsContext,
-        a: unknown,
-        b: unknown,
-        options: HandlebarsOptions,
-      ): string {
-        return a !== b ? options.fn!(this) : options.inverse!(this);
-      },
-    );
-
-    Handlebars.registerHelper(
-      'ifGt',
-      function (this: HandlebarsContext, a: number, b: number, options: HandlebarsOptions): string {
-        return a > b ? options.fn!(this) : options.inverse!(this);
-      },
-    );
-
-    Handlebars.registerHelper(
-      'ifLt',
-      function (this: HandlebarsContext, a: number, b: number, options: HandlebarsOptions): string {
-        return a < b ? options.fn!(this) : options.inverse!(this);
-      },
-    );
-
-    // JSON stringify for debugging
-    Handlebars.registerHelper('json', (context: unknown): string => {
-      return JSON.stringify(context, null, 2);
-    });
-
-    // Join array
-    Handlebars.registerHelper('join', (arr: unknown[], separator: string = ', '): string => {
-      if (!Array.isArray(arr)) return '';
-      return arr.join(separator);
-    });
-
-    this.helpersRegistered = true;
+    registerBuiltinTemplateHelpers();
   }
 
   registerHelper(name: string, helper: HandlebarsHelper): void {
