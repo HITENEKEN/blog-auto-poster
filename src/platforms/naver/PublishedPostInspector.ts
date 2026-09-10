@@ -14,6 +14,12 @@ import * as cheerio from 'cheerio';
 /** 본문 이미지 플레이스홀더 잔여물(이슈 #20 원인 A-2) */
 export const PLACEHOLDER_RE = /⟦IMG\d+⟧/g;
 
+/**
+ * 미구현 템플릿 스텁 문구(이슈 #22) — 개발용 자리표시자가 발행물까지 새어 나갔다.
+ * "준비 중"은 정상 문장("배송 준비 중")과 겹치므로 넣지 않는다.
+ */
+export const STUB_TEXT_RE = /향후 구현|구현 예정|coming\s+soon/gi;
+
 export interface PublishedAnchor {
   href: string;
   /** SE가 이미지마다 붙이는 `se-module-image-link` 앵커인지 */
@@ -47,6 +53,8 @@ export interface PublishedPostSummary {
   liveImageLinkCount: number;
   iframeCount: number;
   placeholderCount: number;
+  /** 미구현 스텁 문구 노출 횟수(이슈 #22) */
+  stubCount: number;
   /** 본문이 통째로 반복 발행됐는지(2026-09-07 사고) */
   duplicated: boolean;
   /** 파트너스 고지 문구 노출 횟수 */
@@ -189,6 +197,7 @@ export function summarizePublishedPost(
     liveImageLinkCount: imageLinks.filter((a) => a.imageLinkHref !== '').length,
     iframeCount: (bodyHtml.match(/<iframe\b/gi) ?? []).length,
     placeholderCount: (bodyHtml.match(PLACEHOLDER_RE) ?? []).length,
+    stubCount: (bodyHtml.match(STUB_TEXT_RE) ?? []).length,
     duplicated: detectDuplicatedComponents(components),
     disclosureCount: components.filter((c) => c.text.includes(DISCLOSURE_TEXT)).length,
   };
@@ -208,6 +217,11 @@ export function evaluatePublishedPost(summary: PublishedPostSummary): PublishedP
       label: '⟦IMGn⟧ 플레이스홀더 0회',
       pass: summary.placeholderCount === 0,
       detail: `${summary.placeholderCount}회 검출`,
+    },
+    {
+      label: '미구현 스텁 문구 0회',
+      pass: summary.stubCount === 0,
+      detail: `${summary.stubCount}회 검출`,
     },
     {
       label: '살아있는 쿠팡 링크 >= 1 (텍스트 링크 + 이미지 링크)',

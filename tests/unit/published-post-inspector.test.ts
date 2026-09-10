@@ -137,6 +137,19 @@ describe('evaluatePublishedPost / collectPublishedPostFailures', () => {
     );
   });
 
+  it('미구현 스텁 문구를 불합격으로 잡는다 (#22)', () => {
+    // 224406393844 마지막 컴포넌트로 발행된 문구 그대로.
+    const html = wrap(
+      textComponent('이 포스팅은 쿠팡 파트너스 활동의 일환입니다'),
+      textComponent('본문'),
+      textComponent('관련 제품 추천 영역입니다. (향후 구현 예정)'),
+      textComponent('🛒 쿠팡에서 보기', 'https://link.coupang.com/a/abc'),
+    );
+    const failures = collectPublishedPostFailures(html).join('\n');
+    expect(failures).toContain('미구현 스텁 문구 0회');
+    expect(failures).toContain('1회 검출');
+  });
+
   it('정상 발행물은 실패 항목이 없다', () => {
     const html = wrap(
       textComponent('이 포스팅은 쿠팡 파트너스 활동의 일환입니다'),
