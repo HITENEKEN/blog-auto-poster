@@ -178,6 +178,10 @@ const TAG_SELECTORS = [
   '.tag_input',
 ];
 
+// 발행 설정 모달 안에서 포커스를 안전하게 떼어내기 위한 중립 요소(모달 제목).
+// Escape를 쓰면 모달 자체가 닫히므로(실측) 클릭으로만 포커스를 옮긴다.
+const MODAL_NEUTRAL_SELECTORS = ['strong[class*="set_title"]'];
+
 // Publish modal (opened by the first 발행 click) contains 공개/비공개 options.
 const PRIVATE_SELECTORS = [
   'input#private-checkbox',
@@ -1494,24 +1498,6 @@ export async function postToNaverBlog(
       }
     });
 
-    // Tags — type each tag followed by Enter so the editor registers chips.
-    if (opts.tags && opts.tags.length > 0) {
-      await runStep(page, 'fill-tags', async () => {
-        const tagInput = await firstVisible(editor!, TAG_SELECTORS, Math.min(5_000, remaining()));
-        if (!tagInput) throw new Error(`no tag input matched: ${TAG_SELECTORS.join(', ')}`);
-        for (const tag of opts.tags!) {
-          await tagInput.fill(tag);
-          await tagInput.press('Enter');
-          await delay(200);
-        }
-        // 태그 자동완성 드롭다운이 열려 남으면 발행 클릭을 가로챈다(#6 실패 원인) —
-        // Escape으로 닫고 포커스를 벗어나게 한다.
-        await tagInput.press('Escape').catch(() => {});
-        await page!.keyboard.press('Escape').catch(() => {});
-        await delay(300);
-      });
-    }
-
     // 발행 직전 정리(#6): 남아 있는 팝업/자동완성 레이어를 닫는다.
     await runStep(page, 'pre-publish', async () => {
       await dismissPopups(page!);
@@ -1534,6 +1520,43 @@ export async function postToNaverBlog(
       if (!publish) throw new Error(`no publish button matched: ${PUBLISH_SELECTORS.join(', ')}`);
       await clickDismissingPopups(page!, publish, 6_000);
     });
+
+    // Tags — 발행 설정 모달이 열린 뒤에만 입력할 수 있다(순서 중요).
+    // 실측(2026-09-14): 태그 입력은 모달 내부에만 존재한다 —
+    //   input#tag-input.tag_input__zdSy_ (placeholder "태그 입력 (최대 30개)").
+    // 모달이 열리기 전에는 DOM에 아예 없으므로 이 단계를 click-publish 앞에서 돌리면
+    // 항상 실패한다(발행 전체가 중단됐던 원인). Enter로 칩이 생성되며 콤마는 구분자가 아니다.
+    // 태그는 메타데이터일 뿐이므로, 입력 필드를 찾지 못해도 발행을 중단하지 않는다 —
+    // 태그가 빠지는 것보다 발행이 실패하는 편이 훨씬 나쁘다. 경고만 남기고 확인 클릭으로 진행한다.
+    if (opts.tags && opts.tags.length > 0) {
+      await runStep(page, 'fill-tags', async () => {
+        const tagInput = await firstVisible(
+          editor ?? page!,
+          TAG_SELECTORS,
+          Math.min(5_000, remaining()),
+        );
+        if (!tagInput) {
+          publishWarnings.push(
+            `태그 입력 필드를 찾지 못해 태그 ${opts.tags!.length}개를 건너뛰고 발행을 계속한다`,
+          );
+          return;
+        }
+        for (const tag of opts.tags!) {
+          await tagInput.fill(tag);
+          await tagInput.press('Enter');
+          await delay(200);
+        }
+        // Escape 금지 — Escape은 모달을 통째로 닫는다(실측). 자동완성 목록은 Enter로
+        // 칩이 생성되면 사라지므로, 포커스만 모달 안의 중립 요소로 옮겨 확실히 정리한다.
+        const neutral = await firstVisible(
+          editor ?? page!,
+          MODAL_NEUTRAL_SELECTORS,
+          Math.min(2_000, remaining()),
+        );
+        await neutral?.click({ timeout: 2_000 }).catch(() => {});
+        await delay(300);
+      });
+    }
 
     if (opts.visibility === 'private') {
       await runStep(page, 'set-private', async () => {
