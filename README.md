@@ -22,6 +22,7 @@
 | [`documents/10-naver-blog-bootstrap.md`](documents/10-naver-blog-bootstrap.md)                         | 네이버 블로그 부트스트랩: 수동 글 작성 → 쿠팡 승인 → 자동화 연동 가이드           |
 | [`documents/11-naver-api-hub-plan.md`](documents/11-naver-api-hub-plan.md)                             | 네이버 API Hub 연동 구현 계획 (키워드 검색 + 블로그 검색)                         |
 | [`documents/12-dashboard-keywords-template-plan.md`](documents/12-dashboard-keywords-template-plan.md) | **대시보드 확장: 인기 키워드 화면 + 쿠팡 파트너스 템플릿 구현 계획**              |
+| [`documents/22-naver-publish-runbook.md`](documents/22-naver-publish-runbook.md)                       | **네이버 주기 발행 런북: 스킬·launchd 트리거·주기/중복 정책·증거 규약**           |
 
 ---
 
@@ -139,9 +140,9 @@ BLOG_POSTER_WEB_JWT_SECRET=your-secret-key
 
 gpt-image-1 단가(USD/장, 근사치):
 
-| 사이즈 | low | medium | high |
-| --- | --- | --- | --- |
-| 1024x1024 | $0.011 | $0.063 | $0.17 |
+| 사이즈                | low    | medium | high  |
+| --------------------- | ------ | ------ | ----- |
+| 1024x1024             | $0.011 | $0.063 | $0.17 |
 | 1024x1536 / 1536x1024 | $0.016 | $0.119 | $0.25 |
 
 `config/*.yaml`의 `imageProviders` 아래에서 제어:
@@ -149,12 +150,12 @@ gpt-image-1 단가(USD/장, 근사치):
 ```yaml
 imageProviders:
   openai:
-    quality: 'low'        # 코드 기본값도 low (high는 장당 ~$0.17로 크레딧 소진이 빠름)
-    size: '1024x1024'     # gpt-image-1 최소 사이즈
-  maxImagesPerPost: 3     # 포스트당 생성 상한
+    quality: 'low' # 코드 기본값도 low (high는 장당 ~$0.17로 크레딧 소진이 빠름)
+    size: '1024x1024' # gpt-image-1 최소 사이즈
+  maxImagesPerPost: 3 # 포스트당 생성 상한
   budget:
-    dailyImageLimit: 20   # 하루 최대 생성 장수 (0 = 무제한)
-    dailyCostLimitUsd: 0  # 하루 누적 예상 비용 한도 (0 = 미사용)
+    dailyImageLimit: 20 # 하루 최대 생성 장수 (0 = 무제한)
+    dailyCostLimitUsd: 0 # 하루 누적 예상 비용 한도 (0 = 미사용)
 ```
 
 - 동일 프롬프트 재실행 시 캐시(`output/images/cache/`)를 재사용해 재과금되지 않습니다.
@@ -190,7 +191,8 @@ documents/
 ├── 09-troubleshooting.md      # 트러블슈팅
 ├── 10-naver-blog-bootstrap.md # 네이버 블로그 부트스트랩
 ├── 11-naver-api-hub-plan.md   # 네이버 API Hub 연동 계획
-└── 12-dashboard-keywords-template-plan.md # 대시보드 확장 계획
+├── 12-dashboard-keywords-template-plan.md # 대시보드 확장 계획
+└── 22-naver-publish-runbook.md # 네이버 주기 발행 런북 (스킬·트리거·주기/중복·증거)
 ```
 
 ---
