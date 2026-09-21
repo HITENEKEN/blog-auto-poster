@@ -1,195 +1,481 @@
-import React, { useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
+import { Link } from 'react-router-dom';
 import { api } from '../services/api';
-import { ScheduledJob } from '@shared/types';
 import { Card, CardContent, CardHeader, CardTitle } from './ui/Card';
 import { Button } from './ui/Button';
 import { Badge } from './ui/Badge';
-import { Clock, Play, Pause, RefreshCw, Settings } from 'lucide-react';
+import { CheckCircle2, XCircle, RefreshCw, Pause, Play, AlertTriangle } from 'lucide-react';
 import { clsx } from 'clsx';
 
-const typeLabels: Record<string, string> = {
-  RESEARCH: '키워드 리서치',
-  GENERATE: '콘텐츠 생성',
-  PUBLISH: '포스트 발행',
-  SYNC_ANALYTICS: '분석 동기화',
+/**
+ * 로봇 패널(설계 §7-3). `GET /api/robot/status`를 15초마다 폴링한다.
+ * 로봇이 한 번도 돌지 않아 robot.sqlite가 없으면 `installed:false` — 빈 상태를 렌더링한다.
+ * 상태 변경은 전부 `POST /api/robot/commands`(명령)로만 한다.
+ */
+
+export interface RobotRun {
+  id: string;
+  kind: 'plan' | 'publish';
+  slot: string;
+  trigger: string;
+  mode: string;
+  status: string;
+  step: string;
+  keyword?: string | null;
+  category_id?: string | null;
+  draft_id?: string | null;
+  preview_sha256?: string | null;
+  approval_requested_at?: string | null;
+  log_no?: string | null;
+  url?: string | null;
+  outcome?: string | null;
+  warnings?: string[];
+  started_at: string;
+  finished_at?: string | null;
+}
+
+export interface RobotNextSlot {
+  kind: 'plan' | 'publish';
+  at: string;
+}
+
+export interface RobotStatusResponse {
+  installed: boolean;
+  enabled: boolean;
+  paused: boolean;
+  mode: 'manual' | 'auto';
+  lease: { pid: number; hostname: string; expiresAt: string } | null;
+  nextSlots: RobotNextSlot[];
+  current: RobotRun | null;
+  awaitingApproval: RobotRun | null;
+  recent: RobotRun[];
+  consecutivePasses: number;
+  autoPromoteAfterPasses: number;
+  openAdRequests: number | null;
+}
+
+export interface RobotRunDetail {
+  run: RobotRun;
+  steps: Array<{ id: number; step: string; attempt: number; status: string; started_at: string }>;
+  plan: { keyword: string; category_id?: string | null; decision?: Record<string, unknown> } | null;
+  evidenceDir: string;
+  /** 배치된 광고(로봇 증거 ads/placement.json). 승인 카드가 보여준다. */
+  placement: { ads: Array<{ id: string; productName?: string }>; slots: unknown[] } | null;
+}
+
+export const POLL_MS = 15_000;
+
+const KIND_LABEL: Record<string, string> = { plan: '기획', publish: '발행' };
+
+const STATUS_LABEL: Record<string, string> = {
+  running: '실행 중',
+  waiting: '대기',
+  done: '완료',
+  skipped: '건너뜀',
+  aborted: '중단',
 };
 
+function outcomeVariant(outcome?: string | null): 'default' | 'secondary' | 'destructive' {
+  if (!outcome) return 'secondary';
+  if (outcome.startsWith('aborted')) return 'destructive';
+  if (outcome.startsWith('skipped')) return 'secondary';
+  return 'default';
+}
+
+function formatKst(iso?: string | null): string {
+  if (!iso) return '-';
+  const ms = Date.parse(iso);
+  if (Number.isNaN(ms)) return iso;
+  return new Date(ms).toLocaleString('ko-KR', { timeZone: 'Asia/Seoul' });
+}
+
+/** 승인 카드에 필요한 정보 — 실행 상세(계획·증거)를 함께 불러온다. */
+async function fetchRunDetail(runId: string): Promise<RobotRunDetail | null> {
+  try {
+    const response = await api.get<RobotRunDetail>(`/api/robot/runs/${runId}`);
+    return response.data;
+  } catch {
+    return null;
+  }
+}
+
 export default function Scheduler() {
-  const [jobs, setJobs] = useState<ScheduledJob[]>([]);
+  const [status, setStatus] = useState<RobotStatusResponse | null>(null);
+  const [detail, setDetail] = useState<RobotRunDetail | null>(null);
   const [loading, setLoading] = useState(true);
-  const [schedulerRunning, setSchedulerRunning] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  const timer = useRef<number | null>(null);
 
-  useEffect(() => {
-    fetchJobs();
-    fetchSchedulerStatus();
-  }, []);
-
-  const fetchJobs = async () => {
+  const load = useCallback(async () => {
     try {
-      const response = await api.get('/api/scheduler/jobs');
-      setJobs(response.data.jobs);
-    } catch (error) {
-      console.error('Failed to fetch jobs:', error);
+      const response = await api.get<RobotStatusResponse>('/api/robot/status');
+      setStatus(response.data);
+      setError(null);
+      const awaiting = response.data.awaitingApproval;
+      if (awaiting) {
+        setDetail(await fetchRunDetail(awaiting.id));
+      } else {
+        setDetail(null);
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : '상태를 불러오지 못했습니다');
     } finally {
       setLoading(false);
     }
-  };
+  }, []);
 
-  const fetchSchedulerStatus = async () => {
-    try {
-      const response = await api.get('/api/scheduler/config');
-      setSchedulerRunning(response.data.enabled);
-    } catch {}
-  };
+  useEffect(() => {
+    void load();
+    timer.current = window.setInterval(() => {
+      void load();
+    }, POLL_MS);
+    return () => {
+      if (timer.current !== null) window.clearInterval(timer.current);
+    };
+  }, [load]);
 
-  const handleTrigger = async (jobName: string) => {
-    try {
-      await api.post(`/api/scheduler/jobs/${jobName}/trigger`);
-      alert('작업이 트리거되었습니다.');
-    } catch (error) {
-      console.error('Trigger failed:', error);
-    }
-  };
+  const sendCommand = useCallback(
+    async (type: string, runId?: string, payload?: Record<string, unknown>) => {
+      setBusy(true);
+      try {
+        await api.post('/api/robot/commands', { type, runId, payload });
+        await load();
+      } catch (err) {
+        setError(err instanceof Error ? err.message : '명령을 보내지 못했습니다');
+      } finally {
+        setBusy(false);
+      }
+    },
+    [load],
+  );
 
-  const handleToggle = async (job: ScheduledJob) => {
-    try {
-      await api.put('/api/scheduler/config', {
-        jobs: jobs.map((j) => (j.name === job.name ? { ...j, enabled: !j.enabled } : j)),
-      });
-      fetchJobs();
-    } catch (error) {
-      console.error('Toggle failed:', error);
-    }
-  };
+  if (loading) {
+    return (
+      <div className="space-y-6">
+        <h1 className="text-3xl font-bold">자동 포스팅</h1>
+        <Card>
+          <CardContent className="p-6 text-muted-foreground">불러오는 중…</CardContent>
+        </Card>
+      </div>
+    );
+  }
 
-  const handleToggleScheduler = async () => {
-    try {
-      await api.put('/api/scheduler/config', { enabled: !schedulerRunning });
-      setSchedulerRunning(!schedulerRunning);
-    } catch (error) {
-      console.error('Scheduler toggle failed:', error);
-    }
-  };
+  if (!status || !status.installed) {
+    return (
+      <div className="space-y-6">
+        <h1 className="text-3xl font-bold">자동 포스팅</h1>
+        <Card>
+          <CardHeader>
+            <CardTitle>로봇이 아직 실행되지 않았습니다</CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-3 text-sm text-muted-foreground">
+            <p>
+              <code>data/robot.sqlite</code>가 없습니다. PM2로 로봇을 한 번 띄우면 이 패널에
+              상태·승인 카드·최근 실행이 나타납니다.
+            </p>
+            <pre className="rounded bg-muted p-3 text-xs">
+              npm run build{'\n'}
+              pm2 start ecosystem.config.cjs{'\n'}
+              npm run robot -- status
+            </pre>
+          </CardContent>
+        </Card>
+      </div>
+    );
+  }
+
+  const approval = status.awaitingApproval;
+  const plan = detail?.plan ?? null;
+  const decision = (plan?.decision ?? {}) as Record<string, unknown>;
+  const placedAds = detail?.placement?.ads ?? [];
 
   return (
     <div className="space-y-6">
-      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
-        <div>
-          <h1 className="text-3xl font-bold">자동 포스팅 설정</h1>
-          <p className="text-muted-foreground">스케줄러를 관리하고 자동 발행 작업을 설정하세요</p>
-        </div>
-        <div className="flex gap-2">
-          <Button variant="outline" onClick={fetchJobs} disabled={loading}>
-            <RefreshCw className={clsx('h-4 w-4 mr-2', loading && 'animate-spin')} />
-            새로고침
+      <div className="flex items-center justify-between">
+        <h1 className="text-3xl font-bold">자동 포스팅</h1>
+        <div className="flex items-center gap-2">
+          <Button variant="outline" size="sm" onClick={() => void load()} disabled={busy}>
+            <RefreshCw className="mr-2 h-4 w-4" /> 새로고침
           </Button>
           <Button
-            variant={schedulerRunning ? 'default' : 'outline'}
-            onClick={handleToggleScheduler}
-            className="gap-2"
+            variant="outline"
+            size="sm"
+            disabled={busy}
+            onClick={() => void sendCommand(status.paused ? 'resume' : 'pause')}
           >
-            {schedulerRunning ? <Pause className="h-4 w-4" /> : <Play className="h-4 w-4" />}
-            {schedulerRunning ? '스케줄러 중지' : '스케줄러 시작'}
+            {status.paused ? (
+              <>
+                <Play className="mr-2 h-4 w-4" /> 재개
+              </>
+            ) : (
+              <>
+                <Pause className="mr-2 h-4 w-4" /> 일시정지
+              </>
+            )}
+          </Button>
+          <Button
+            size="sm"
+            disabled={busy}
+            onClick={() => void sendCommand('run-now', undefined, { kind: 'plan' })}
+          >
+            기획 지금 실행
           </Button>
         </div>
       </div>
 
-      <Card>
-        <CardHeader>
-          <CardTitle>예약된 작업 ({jobs.length}개)</CardTitle>
-        </CardHeader>
-        <CardContent>
-          {loading ? (
-            <div className="flex items-center justify-center h-64">
-              <div className="animate-spin rounded-full h-12 w-12 border-4 border-primary border-t-transparent" />
-            </div>
-          ) : jobs.length === 0 ? (
-            <div className="text-center py-12 text-muted-foreground">
-              <Clock className="h-12 w-12 mx-auto mb-4 opacity-50" />
-              <p>예약된 작업이 없습니다.</p>
-            </div>
-          ) : (
-            <div className="space-y-4">
-              {jobs.map((job) => (
-                <div
-                  key={job.name}
-                  className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 p-4 rounded-lg border"
-                >
-                  <div className="flex items-center gap-4 min-w-0">
-                    <div className="p-2 rounded-lg bg-primary/10">
-                      <Clock className="h-5 w-5 text-primary" />
-                    </div>
-                    <div className="min-w-0">
-                      <div className="flex items-center gap-2">
-                        <h4 className="font-medium truncate">{job.name}</h4>
-                        <Badge variant="outline">{typeLabels[job.type] || job.type}</Badge>
-                        <Badge
-                          className={clsx(
-                            job.enabled
-                              ? 'bg-green-100 text-green-700'
-                              : 'bg-gray-100 text-gray-700',
-                          )}
-                        >
-                          {job.enabled ? '활성' : '비활성'}
-                        </Badge>
-                      </div>
-                      <div className="flex items-center gap-4 mt-1 text-sm text-muted-foreground">
-                        <span className="font-mono">{job.cron}</span>
-                        <span>우선순위: {job.priority}</span>
-                        <span>최대 재시도: {job.config.maxAttempts || 3}회</span>
-                      </div>
-                    </div>
-                  </div>
-                  <div className="flex items-center gap-2">
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      onClick={() => handleToggle(job)}
-                      className={clsx(job.enabled ? 'bg-green-50 hover:bg-green-100' : '')}
-                    >
-                      {job.enabled ? '비활성화' : '활성화'}
-                    </Button>
-                    <Button variant="outline" size="sm" onClick={() => handleTrigger(job.name)}>
-                      <Play className="h-4 w-4 mr-1" />
-                      지금 실행
-                    </Button>
-                    <Button variant="ghost" size="icon" asChild>
-                      <a href={`/settings?job=${job.name}`}>
-                        <Settings className="h-4 w-4" />
-                      </a>
-                    </Button>
-                  </div>
-                </div>
-              ))}
-            </div>
-          )}
-        </CardContent>
-      </Card>
+      {error && (
+        <div className="flex items-center gap-2 rounded border border-destructive/40 bg-destructive/10 p-3 text-sm">
+          <AlertTriangle className="h-4 w-4" /> {error}
+        </div>
+      )}
 
-      {/* Cron expression helper */}
-      <Card>
-        <CardHeader>
-          <CardTitle>Cron 표현식 가이드</CardTitle>
-        </CardHeader>
-        <CardContent>
-          <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3 text-sm">
-            {[
-              { expression: '0 6 * * *', description: '매일 06:00' },
-              { expression: '0 7 * * *', description: '매일 07:00' },
-              { expression: '0 8 * * *', description: '매일 08:00' },
-              { expression: '0 * * * *', description: '매시간 정각' },
-              { expression: '0 */6 * * *', description: '6시간마다' },
-              { expression: '0 0 * * 0', description: '매주 일요일 00:00' },
-            ].map((item) => (
-              <div
-                key={item.expression}
-                className="p-3 rounded-lg bg-muted/50 flex items-center justify-between"
-              >
-                <code className="font-mono text-primary">{item.expression}</code>
-                <span className="text-muted-foreground">{item.description}</span>
+      <div className="grid gap-4 md:grid-cols-4">
+        <Card>
+          <CardHeader>
+            <CardTitle className="text-base">상태</CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-1 text-sm">
+            <div>
+              활성화:{' '}
+              <Badge variant={status.enabled ? 'default' : 'secondary'}>
+                {status.enabled ? '켜짐' : '꺼짐'}
+              </Badge>
+            </div>
+            <div>
+              모드: <Badge variant="outline">{status.mode}</Badge>
+            </div>
+            <div>
+              일시정지:{' '}
+              <Badge variant={status.paused ? 'destructive' : 'secondary'}>
+                {status.paused ? '예' : '아니오'}
+              </Badge>
+            </div>
+            <div className="text-muted-foreground">
+              연속 통과 {status.consecutivePasses}/{status.autoPromoteAfterPasses}
+              {status.consecutivePasses >= status.autoPromoteAfterPasses && ' · 자동 전환 검토'}
+            </div>
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader>
+            <CardTitle className="text-base">다음 슬롯</CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-1 text-sm">
+            {status.nextSlots.length === 0 && (
+              <div className="text-muted-foreground">예정 없음</div>
+            )}
+            {status.nextSlots.map((slot) => (
+              <div key={`${slot.kind}-${slot.at}`}>
+                {KIND_LABEL[slot.kind]} · {formatKst(slot.at)}
               </div>
             ))}
-          </div>
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader>
+            <CardTitle className="text-base">현재 실행</CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-1 text-sm">
+            {status.current ? (
+              <>
+                <div>
+                  {KIND_LABEL[status.current.kind] ?? status.current.kind} ·{' '}
+                  <span className="font-mono">{status.current.step}</span>
+                </div>
+                <div className="text-muted-foreground">
+                  {status.current.keyword ?? status.current.id}
+                </div>
+                <div className="text-muted-foreground">
+                  {STATUS_LABEL[status.current.status] ?? status.current.status}
+                </div>
+              </>
+            ) : (
+              <div className="text-muted-foreground">진행 중 실행 없음</div>
+            )}
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader>
+            <CardTitle className="text-base">소재 요청</CardTitle>
+          </CardHeader>
+          <CardContent className="text-sm">
+            {status.openAdRequests === null ? (
+              <span className="text-muted-foreground">광고 기능 미사용</span>
+            ) : (
+              <span>열린 요청 {status.openAdRequests}건</span>
+            )}
+            <div className="mt-2">
+              <Link className="text-primary underline" to="/coupang">
+                쿠팡 현황으로 이동
+              </Link>
+            </div>
+          </CardContent>
+        </Card>
+      </div>
+
+      {approval && (
+        <Card className="border-primary/40">
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2 text-xl">
+              <CheckCircle2 className="h-5 w-5" /> 승인 대기 — {approval.keyword ?? approval.id}
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-3 text-sm">
+            <div className="grid gap-2 md:grid-cols-2">
+              <div>
+                <div className="font-medium">미리보기</div>
+                <div className="break-all text-muted-foreground">
+                  {approval.preview_sha256
+                    ? `sha256 ${approval.preview_sha256.slice(0, 16)}…`
+                    : 'sha256 없음'}
+                </div>
+                {approval.draft_id && (
+                  <Link
+                    className="text-primary underline"
+                    to={`/posts/${approval.draft_id}/edit`}
+                    target="_blank"
+                  >
+                    초안 미리보기 열기
+                  </Link>
+                )}
+              </div>
+              <div>
+                <div className="font-medium">선정 근거</div>
+                <div className="text-muted-foreground">
+                  {String(decision.reason ?? '(근거 없음)')}
+                </div>
+                {plan?.category_id && (
+                  <div className="text-muted-foreground">카테고리 {plan.category_id}</div>
+                )}
+              </div>
+            </div>
+
+            <div>
+              <div className="font-medium">광고 상품 ({placedAds.length}개)</div>
+              {placedAds.length === 0 ? (
+                <div className="text-muted-foreground">배치된 광고가 없습니다</div>
+              ) : (
+                <ul className="list-inside list-disc text-muted-foreground">
+                  {placedAds.map((ad) => (
+                    <li key={ad.id}>{ad.productName ? `${ad.productName} (${ad.id})` : ad.id}</li>
+                  ))}
+                </ul>
+              )}
+            </div>
+
+            <div className="text-muted-foreground">
+              요청 시각 {formatKst(approval.approval_requested_at)} · 120분이 지나면 자동 종료됩니다
+            </div>
+
+            <div className="flex gap-2">
+              <Button
+                disabled={busy}
+                onClick={() =>
+                  void sendCommand('approve', approval.id, {
+                    previewSha256: approval.preview_sha256,
+                  })
+                }
+              >
+                승인하고 발행
+              </Button>
+              <Button
+                variant="destructive"
+                disabled={busy}
+                onClick={() =>
+                  void sendCommand('reject', approval.id, { reason: '대시보드에서 거절' })
+                }
+              >
+                <XCircle className="mr-2 h-4 w-4" /> 거절
+              </Button>
+            </div>
+          </CardContent>
+        </Card>
+      )}
+
+      <Card>
+        <CardHeader>
+          <CardTitle className="text-xl">최근 실행 ({status.recent.length}건)</CardTitle>
+        </CardHeader>
+        <CardContent>
+          {status.recent.length === 0 ? (
+            <div className="text-sm text-muted-foreground">실행 이력이 없습니다.</div>
+          ) : (
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm">
+                <thead>
+                  <tr className="border-b text-left text-muted-foreground">
+                    <th className="p-2">시작</th>
+                    <th className="p-2">종류</th>
+                    <th className="p-2">단계</th>
+                    <th className="p-2">키워드</th>
+                    <th className="p-2">결과</th>
+                    <th className="p-2">URL</th>
+                    <th className="p-2">경고</th>
+                    <th className="p-2">명령</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {status.recent.map((run) => (
+                    <tr key={run.id} className="border-b align-top">
+                      <td className="p-2 whitespace-nowrap">{formatKst(run.started_at)}</td>
+                      <td className="p-2">{KIND_LABEL[run.kind] ?? run.kind}</td>
+                      <td className="p-2 font-mono text-xs">{run.step}</td>
+                      <td className="p-2">{run.keyword ?? '-'}</td>
+                      <td className="p-2">
+                        <Badge variant={outcomeVariant(run.outcome)}>
+                          {run.outcome ?? STATUS_LABEL[run.status] ?? run.status}
+                        </Badge>
+                      </td>
+                      <td className="p-2">
+                        {run.url ? (
+                          <a
+                            className="text-primary underline"
+                            href={run.url}
+                            target="_blank"
+                            rel="noreferrer"
+                          >
+                            {run.log_no ?? '열기'}
+                          </a>
+                        ) : (
+                          '-'
+                        )}
+                      </td>
+                      <td
+                        className={clsx(
+                          'p-2',
+                          (run.warnings?.length ?? 0) > 0 && 'text-destructive',
+                        )}
+                      >
+                        {(run.warnings ?? []).join(', ') || '-'}
+                      </td>
+                      <td className="p-2">
+                        {run.outcome === 'aborted-unconfirmed' ? (
+                          <span className="text-muted-foreground">
+                            `npm run robot -- adopt {run.id} &lt;logNo&gt;`
+                          </span>
+                        ) : run.status === 'running' || run.status === 'waiting' ? (
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            disabled={busy || run.step === 'PUBLISHING'}
+                            onClick={() => void sendCommand('cancel', run.id)}
+                          >
+                            취소
+                          </Button>
+                        ) : (
+                          '-'
+                        )}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
         </CardContent>
       </Card>
     </div>
