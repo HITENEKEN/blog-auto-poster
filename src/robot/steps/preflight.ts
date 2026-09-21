@@ -58,10 +58,31 @@ export const preflight: StepHandler = async (ctx: StepContext): Promise<StepResu
     throw error;
   }
 
-  const health = await ctx.api.health();
-  const platforms = health.services?.platforms || {};
+  let health = await ctx.api.health();
+  let platforms = health.services?.platforms || {};
+  let woke = false;
   if (platforms.naver !== true) {
-    throw new RobotAbort('health', 'platforms.naver가 true가 아닙니다');
+    // 재기동 직후 `/health`가 아직 플랫폼 어댑터를 깨우지 못한 경우의 안전망(설계 §0·§4-1).
+    // `/health` 자체도 조회 시점에 어댑터를 깨우지만, 배포 순서·설정 리로드 race 등을
+    // 대비해 여기서도 한 번 더 깨운다. `/api/blogs` 실패는 무시하고 재조회만 시도한다 —
+    // 깨우기가 안 되면 어차피 아래 재조회도 naver: true를 못 볼 뿐이다.
+    woke = true;
+    logger.warn({ platforms }, 'platforms.naver가 준비되지 않음 — /api/blogs로 깨우기 시도');
+    try {
+      await ctx.api.blogs();
+    } catch (error) {
+      logger.warn({ error: String(error) }, '/api/blogs 깨우기 호출 실패');
+    }
+    for (let attempt = 0; attempt < 2 && platforms.naver !== true; attempt += 1) {
+      health = await ctx.api.health();
+      platforms = health.services?.platforms || {};
+    }
+  }
+  if (platforms.naver !== true) {
+    throw new RobotAbort(
+      'health',
+      `platforms.naver가 true가 아닙니다${woke ? ' (깨우기 후에도 실패)' : ''}`,
+    );
   }
   if (health.services?.scheduler && health.services.scheduler !== 'stopped') {
     throw new RobotAbort('health', `scheduler가 ${health.services.scheduler} 상태입니다`);
@@ -83,6 +104,7 @@ export const preflight: StepHandler = async (ctx: StepContext): Promise<StepResu
   const report: Record<string, unknown> = {
     checkedAt: ctx.clock.now().toISOString(),
     naverSession: session ?? null,
+    platformWake: woke ? { attempted: true, resolved: platforms.naver === true } : null,
     rssItems: rssItems.length,
     rssLogNos: collectRssLogNos(rssXml).length,
   };

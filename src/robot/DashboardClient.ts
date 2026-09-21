@@ -99,6 +99,12 @@ export interface KeywordBlogsResult {
 export interface DashboardApi {
   ensureToken(): Promise<void>;
   health(): Promise<HealthResponse>;
+  /**
+   * `GET /api/blogs` — 플랫폼 어댑터를 깨우는 부수효과가 있다(설계 §4-1). PREFLIGHT가
+   * `health().services.platforms`에 `naver`가 없을 때 1회 호출해 재기동 직후의
+   * 지연 초기화(§0)를 넘긴다. 응답 형태는 신경 쓰지 않는다 — 깨우기 목적뿐이다.
+   */
+  blogs(): Promise<{ blogs: Array<Record<string, unknown>> }>;
   adsInventory(params: {
     keyword?: string;
     categoryId?: string;
@@ -295,6 +301,12 @@ export class DashboardClient implements DashboardApi {
 
   health(): Promise<HealthResponse> {
     return this.request<HealthResponse>('GET', '/health', undefined, {
+      retries: IDEMPOTENT_RETRIES,
+    });
+  }
+
+  blogs(): Promise<{ blogs: Array<Record<string, unknown>> }> {
+    return this.request<{ blogs: Array<Record<string, unknown>> }>('GET', '/api/blogs', undefined, {
       retries: IDEMPOTENT_RETRIES,
     });
   }

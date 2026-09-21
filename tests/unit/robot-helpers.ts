@@ -82,6 +82,7 @@ export function createFakeApi(overrides: Partial<FakeApi> = {}): FakeApi {
           naverSession: { expiresAt: '2027-01-01T00:00:00.000Z', daysLeft: 30 },
         },
       }),
+    blogs: async () => recorded('blogs', { blogs: [] }),
     adsInventory: async (params: { keyword?: string; categoryId?: string; status?: string }) => {
       const key = params.keyword ?? params.categoryId ?? 'default';
       const count = api.adCounts![key] ?? 3;

@@ -91,6 +91,19 @@ export class PlatformRegistry {
     return adapterRegistry.has(name);
   }
 
+  /**
+   * `names`에 등록된 어댑터가 있으면 인스턴스를 만들어 둔다(순수 인스턴스화, I/O 없음).
+   * `enabled: false`인 플랫폼은 기동 시 initializeAll이 건너뛰므로 `getAdapter()`를
+   * 누군가 부르기 전까지 `this.instances`에 잡히지 않는다 — `validateAll()`이 그
+   * 플랫폼을 영원히 보고하지 않는 원인이다(재기동 직후 `/health`의 `platforms`가
+   * `{}`로 나오던 문제, 설계 §0). `/api/blogs`가 이미 같은 방식으로 어댑터를 깨운다.
+   */
+  ensureAdapters(names: Iterable<string>): void {
+    for (const name of names) {
+      if (this.hasAdapter(name)) this.getAdapter(name);
+    }
+  }
+
   async validateAll(): Promise<Record<string, boolean>> {
     const results: Record<string, boolean> = {};
 

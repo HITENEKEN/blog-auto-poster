@@ -202,6 +202,9 @@ export async function createWebServer(options: WebServerOptions): Promise<Fastif
   // Health check
   app.get('/health', async () => {
     const affiliateStatus = await affiliateRegistry.validateAll();
+    // enabled 여부와 무관하게 설정된 플랫폼의 어댑터를 깨운다 — 그래야 재기동 직후에도
+    // validateAll()이 전체를 보고한다(`/api/blogs`가 이미 쓰는 방식, 설계 §0·§4-1).
+    platformRegistry.ensureAdapters(Object.keys(platformConfigs));
     const platformStatus = await platformRegistry.validateAll();
 
     return {
