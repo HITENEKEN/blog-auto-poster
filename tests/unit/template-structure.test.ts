@@ -106,4 +106,16 @@ describe.each(templateFiles)('%s — 구조 체크리스트', (file) => {
     expect(html.trim().length).toBeGreaterThan(0);
     expect(html).not.toContain('href="#"');
   });
+
+  it('렌더 결과의 <div> 여닫힘이 짝을 이룬다', () => {
+    // 여는 태그가 빠지면 짝 없는 </div>가 래퍼를 일찍 닫아 뒤 섹션의 스타일이 깨진다
+    // (#26 문체 전환 때 템플릿 4종에서 실제로 발생).
+    const html = stripComments(Handlebars.compile(body)(SAMPLE));
+    let depth = 0;
+    for (const [tag] of html.matchAll(/<div\b[^>]*>|<\/div>/g)) {
+      depth += tag === '</div>' ? -1 : 1;
+      expect(depth, '짝 없는 </div>').toBeGreaterThanOrEqual(0);
+    }
+    expect(depth, '닫히지 않은 <div>').toBe(0);
+  });
 });
