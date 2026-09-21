@@ -322,9 +322,55 @@ export function buildEventPreviewCard(
 }
 
 /**
+ * 자동 배치 광고 마커(`data-ad-source="auto"`)를 **네트워크 조회 없이** 상품 카드로
+ * 바꾼다(설계 §3-4). 키는 `fetchLinkPreviewCards`와 같은 마커 문서 순서 인덱스다.
+ *
+ * 자동 광고는 인벤토리에 저장된 props(url·상품명·이미지)만으로 카드를 만든다 —
+ * 발행 순간 상품 페이지를 조회하면 미리보기와 발행본이 달라진다(설계 §3-4).
+ * 가격·평점은 저장하지 않으므로 `showPrice`와 무관하게 표시되지 않는다.
+ */
+export function collectOfflineAdCards(html: string): Map<number, string> {
+  const cards = new Map<number, string>();
+  if (!html || !html.includes('data-ad-source')) return cards;
+  const $ = cheerio.load(html);
+  const markers = $('[data-coupang-widget]').toArray();
+  for (let i = 0; i < markers.length; i++) {
+    const el = markers[i];
+    if ($(el).attr('data-ad-source') !== 'auto') continue;
+    if ($(el).attr('data-coupang-widget') !== 'product-link') continue;
+    try {
+      const props = JSON.parse(decodeURIComponent($(el).attr('data-widget-props') || '')) as {
+        url?: string;
+        text?: string;
+        imageUrl?: string;
+      };
+      if (!/^https?:\/\//i.test(props.url ?? '')) continue;
+      cards.set(
+        i,
+        buildProductPreviewCard(
+          props.url ?? '',
+          {
+            title: props.text ?? '',
+            imageUrl: props.imageUrl ?? '',
+            source: props.imageUrl ? 'og' : 'none',
+          },
+          props.text,
+        ),
+      );
+    } catch (error) {
+      logger.warn({ index: i, error: String(error) }, 'Offline ad card build failed');
+    }
+  }
+  return cards;
+}
+
+/**
  * 본문의 product-link/event-link 마커에 대해 미리보기 카드 HTML을 사전 수집한다.
  * 키는 마커의 문서 순서 인덱스(expandCoupangWidgets의 previewCards와 짝을 이룬다).
  * 카드를 만들 수 없는 마커는 맵에서 생략(기존 텍스트 링크 폴백).
+ *
+ * 자동 배치 광고(`data-ad-source="auto"`)는 건너뛴다 — 그 카드는 인벤토리 props만으로
+ * `collectOfflineAdCards`가 만들고, 발행 시점에 상품 페이지를 조회하지 않는다(설계 §3-4).
  */
 export async function fetchLinkPreviewCards(
   html: string,
@@ -337,6 +383,7 @@ export async function fetchLinkPreviewCards(
   const markers = $('[data-coupang-widget]').toArray();
   for (let i = 0; i < markers.length; i++) {
     const el = markers[i];
+    if ($(el).attr('data-ad-source') === 'auto') continue;
     const kind = $(el).attr('data-coupang-widget');
     if (kind !== 'product-link' && kind !== 'event-link') continue;
     let url = '';

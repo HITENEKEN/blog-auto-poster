@@ -1,26 +1,13 @@
 import * as cheerio from 'cheerio';
-import type { LinkPreset } from './LinkPresetStore';
-import {
-  buildCoupangWidgetMarker,
-  normalizeLinkWidgetProps,
-  type CoupangWidgetKind,
-  type CoupangWidgetProps,
-} from './CoupangWidgets';
+import { normalizeLinkWidgetProps, type CoupangWidgetProps } from './CoupangWidgets';
 import { isSurvivableHref } from './NaverHtml';
 
 /**
- * 사용자가 등록한 링크/배너 프리셋을 본문에 자동 배치한다(이슈 #18).
+ * 본문 위젯 마커 유틸 (이슈 #17·#18·#20).
  *
- * 규칙(결정적 — AI가 링크를 임의 생성/선택하지 않는다):
- *  - 본문에 이미 위젯 마커가 있으면 아무것도 배치하지 않는다
- *    (사용자가 직접 삽입한 위젯을 존중).
- *  - 배치 가능한 프리셋은 본문의 h2/h3 섹션 경계에 균등 분산된다.
- *    프리셋 k개, 섹션 n개일 때 i번째 프리셋은
- *    round((i+1) * n / (k+1))번째 섹션 뒤에 붙는다.
- *  - 섹션이 없으면 본문 끝에 순서대로 추가한다.
- *
- * 발행 라우트는 AI polish 이후 이 함수를 호출하므로, AI가 프리셋 마커를
- * 임의로 지우거나 재배치할 수 없다.
+ * 자동 광고 배치는 `AdPlacement.ts`가 맡는다 — 예전처럼 등록된 프리셋을 모든 글에
+ * 균등 분산하지 않는다(주제 무관 상품 문제, 이슈 #21). 여기에는 마커를 다루는
+ * 순수 함수(승격·CTA 채우기)만 남는다.
  */
 
 /** 본문에 위젯 마커가 이미 존재하는지 */
@@ -80,51 +67,6 @@ export function liftWidgetMarkers(html: string): string {
   return $('body').html() ?? html;
 }
 
-export interface PlacementResult {
-  html: string;
-  /** 배치된 프리셋 목록 (kind/label) */
-  placed: Array<{ kind: CoupangWidgetKind; label: string }>;
-}
-
-/** 프리셋 순서에 따라 섹션 뒤에 균등 분산 배치한다. */
-export function placePresetsInContent(html: string, presets: LinkPreset[]): PlacementResult {
-  const usable = presets.filter((p) => {
-    const props = p.props as CoupangWidgetProps;
-    if (p.kind === 'product-link' || p.kind === 'event-link') return Boolean(props?.url);
-    if (p.kind === 'ad-banner') return Boolean(props?.url && props?.imageUrl);
-    return Boolean(props?.snippet);
-  });
-  if (usable.length === 0 || hasWidgetMarkers(html)) {
-    return { html, placed: [] };
-  }
-
-  const sections = findSectionBoundaries(html);
-  const insertAt = new Map<number, string>(); // 오프셋 → 삽입 HTML
-  const placed: PlacementResult['placed'] = [];
-
-  usable.forEach((preset, i) => {
-    const marker = buildCoupangWidgetMarker(preset.kind, preset.props);
-    placed.push({ kind: preset.kind, label: preset.label });
-    if (sections.length === 0) {
-      insertAt.set(html.length, (insertAt.get(html.length) ?? '') + marker);
-      return;
-    }
-    const sectionIndex = Math.min(
-      sections.length - 1,
-      Math.max(0, Math.round(((i + 1) * sections.length) / (usable.length + 1)) - 1),
-    );
-    const offset = sections[sectionIndex].end;
-    insertAt.set(offset, (insertAt.get(offset) ?? '') + marker);
-  });
-
-  // 뒤에서부터 삽입해 오프셋이 밀리지 않게 한다
-  let out = html;
-  for (const [offset, insert] of [...insertAt.entries()].sort((a, b) => b[0] - a[0])) {
-    out = out.slice(0, offset) + insert + out.slice(offset);
-  }
-  return { html: out, placed };
-}
-
 /**
  * 템플릿 CTA 앵커의 class — 발행 시점에 실제 제휴 URL을 채워 넣을 대상.
  * 생성 시점엔 `affiliateUrl`이 비어 있어 CTA 자체가 렌더되지 않지만(이슈 #20 원인 C),
@@ -175,25 +117,13 @@ export function fillCtaAffiliateUrl(html: string, url: string): string {
 /**
  * 본문 CTA 버튼에 채울 제휴 URL을 정한다. 순수 함수 — 유닛 테스트 대상.
  *
- * 우선순위: 등록된 product-link 프리셋 → 본문의 첫 유효 product-link 마커 →
- * 글 메타의 affiliateUrl.
+ * 우선순위: 본문의 첫 유효 product-link 마커(자동 광고 포함) → 글 메타의 affiliateUrl.
  *
- * 배경(2026-09-07 실발행물 logNo 224404059950): 기존 로직은 **프리셋만** 봤다.
- * 프리셋이 하나도 없는 상태라 `ctaUrl`이 빈 값이 됐고, 템플릿도 `affiliateUrl`이
- * 비어 CTA를 렌더하지 않아 "가격 확인하기" 버튼이 발행물에서 통째로 사라졌다.
- * 사용자가 본문에 직접 꽂은 상품 링크가 있으면 그걸 쓰는 게 맞다.
+ * 배경(2026-09-07 실발행물 logNo 224404059950): 기존 로직은 등록 프리셋만 봤고,
+ * 프리셋이 하나도 없으면 `ctaUrl`이 빈 값이 되어 "가격 확인하기" 버튼이 발행물에서
+ * 통째로 사라졌다. 지금은 프리셋 대신 인벤토리에서 배치된 자동 광고 마커를 쓴다.
  */
-export function resolveCtaAffiliateUrl(
-  presets: LinkPreset[],
-  html: string,
-  fallbackUrl?: string,
-): string {
-  for (const preset of presets) {
-    if (preset.kind !== 'product-link') continue;
-    const link = normalizeLinkWidgetProps(preset.kind, preset.props as CoupangWidgetProps);
-    if (link) return link.url;
-  }
-
+export function resolveCtaAffiliateUrl(html: string, fallbackUrl?: string): string {
   if (html && hasWidgetMarkers(html)) {
     const $ = cheerio.load(html);
     for (const el of $('[data-coupang-widget="product-link"]').toArray()) {

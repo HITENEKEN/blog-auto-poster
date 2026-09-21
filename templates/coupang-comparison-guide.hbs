@@ -68,8 +68,6 @@ jsonLd:
 .ccg-checklist{background:#e8f5e9;border-radius:8px;padding:14px 16px;list-style:none}
 .ccg-checklist li{margin-bottom:10px;font-size:.98rem}
 .ccg-checklist li::before{content:"☐ "}
-.ccg-notice{margin-top:28px;padding-top:14px;border-top:1px solid #eee}
-.ccg-notice small{color:#adb5bd;font-size:.78rem}
 @media(max-width:600px){.ccg-header h1{font-size:1.25rem}.ccg-table{font-size:.82rem}.ccg-table th,.ccg-table td{padding:6px}}
 .section-image{margin:28px 0}
 .section-image img{display:block;max-width:100%;border-radius:10px;box-shadow:0 4px 14px rgba(0,0,0,.12);margin:0 auto}
@@ -83,26 +81,21 @@ jsonLd:
 .ccg-best{box-shadow:0 6px 18px rgba(28,126,214,.18)}
 </style>
 
-<div class="ccg-disclosure" style="font-size:.85rem;color:#868e96;margin:0 0 16px;">
-이 포스트는 쿠팡 파트너스 활동의 일환으로, 일정액의 수수료를 제공받을 수 있습니다.
-</div>
-
-
 <!-- 헤더 -->
 <div class="ccg-header">
 <h1>{{categoryName}} BEST{{productCount}} 비교 추천</h1>
 <p class="ccg-sub">{{currentYear}}년 기준 · 가격/성능/리뷰 종합 분석</p>
 </div>
 
-<!-- 1인칭 경험 도입부 -->
+<!-- 도입부 (기준형) -->
 {{#if experienceIntro}}
 <div class="ccg-experience">{{experienceIntro}}</div>
 {{/if}}
 
 <!-- 요약 -->
 <div class="ccg-section">
-<p>{{categoryName}} 비교 고민 중이셨나요? 저도 처음엔 선택지가 너무 많아 막막했는데, 직접 여럿 써보고 비교해 보니 확실한 기준이 생기더라고요.
-이 글에서는 인기 제품 {{productCount}}개의 스펙, 장단점, 실사용 후기를 한눈에 비교해 드립니다.</p>
+<p>{{categoryName}} 비교를 고민하고 계신가요? 선택지가 많을수록 먼저 정해야 하는 것은 기준입니다.
+이 글에서는 인기 제품 {{productCount}}개의 스펙과 장단점, 후기에서 반복되는 지적을 한눈에 비교할 수 있게 정리했습니다.</p>
 </div>
 
 <!-- 전체 비교표 -->
@@ -176,7 +169,7 @@ jsonLd:
 <li><a href="{{this.link}}" target="_blank" rel="noopener">{{this.title}}</a> — {{this.bloggername}}</li>
 {{/each}}
 </ul>
-<p>상위 블로그들을 비교해 보니, 각 제품이 강조하는 포인트가 달랐어요. 저도 직접 써보고 나서 그 차이가 체감되더라고요.</p>
+<p>상위 블로그들을 비교해 보면 제품마다 강조하는 포인트가 다릅니다. 그 차이는 사용 후기에서도 반복해서 언급되니, 어떤 기준으로 비교했는지 확인해 보세요.</p>
 </div>
 </div>
 {{/if}}
@@ -194,18 +187,18 @@ jsonLd:
 </div>
 {{/if}}
 
-<!-- 제가 고른 이유 (경험) -->
+<!-- 고른 이유 (선택 기준) -->
 {{#if whyIChoseIt}}
 <div class="ccg-section">
-<h2>제가 이걸로 골라본 경험</h2>
+<h2>고를 때 비교한 기준</h2>
 <div class="ccg-why">{{whyIChoseIt}}</div>
 </div>
 {{/if}}
 
 {{#if sectionImages.usage}}
 <figure class="section-image">
-<img src="{{sectionImages.usage}}" alt="제가 이걸로 골라본 경험" loading="lazy" />
-<figcaption>제가 이걸로 골라본 경험</figcaption>
+<img src="{{sectionImages.usage}}" alt="이해를 돕기 위한 예시 이미지 (AI 생성)" loading="lazy" />
+<figcaption>이해를 돕기 위한 예시 이미지 (AI 생성)</figcaption>
 </figure>
 {{/if}}
 
@@ -258,7 +251,7 @@ jsonLd:
 </div>
 {{/if}}
 
-<!-- 마무리 (경험 결론) -->
+<!-- 마무리 (구매 전 점검) -->
 {{#if conclusion}}
 <div class="ccg-section">
 <div class="ccg-best">
@@ -267,9 +260,4 @@ jsonLd:
 </div>
 </div>
 {{/if}}
-
-<!-- 고지 -->
-<div class="ccg-notice">
-<small>※ 이 포스팅은 쿠팡 파트너스 활동의 일환으로, 이에 따른 일정액의 수수료를 제공받습니다.</small>
-</div>
 </div>

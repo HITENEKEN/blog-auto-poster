@@ -33,8 +33,8 @@ optionalFields:
   - "usageTips"
   - "buyingChecklist"
 seo:
-  titleTemplate: "{{productName}} 솔직 리뷰 - 장단점 총정리 {{currentYear}}"
-  descriptionTemplate: "{{productName}} 실사용 후기. 가격 {{price}}원{{#if discountRate}}, {{discountRate}}% 할인 중{{/if}}. 장점과 단점을 균형있게 정리했습니다."
+  titleTemplate: "{{productName}} 선택 기준 - 장단점 총정리 {{currentYear}}"
+  descriptionTemplate: "{{productName}} 스펙과 장단점 정리. 가격 {{price}}원{{#if discountRate}}, {{discountRate}}% 할인 중{{/if}}. 후기에서 반복되는 지적까지 함께 확인했습니다."
   keywords: ["{{productName}} 추천", "{{productName}} 리뷰", "{{productName}} 가격", "{{productName}} 후기", "{{categoryName}}"]
 jsonLd:
   type: "Product"
@@ -93,8 +93,6 @@ jsonLd:
 .cpr-final{text-align:center;margin:32px 0;padding:24px;background:#fff5f5;border-radius:10px}
 .cpr-cta-large{display:inline-block;background:#e03131;color:#fff;padding:16px 36px;border-radius:10px;text-decoration:none;font-size:1.15rem;font-weight:700}
 .cpr-cta-large:hover{opacity:.88}
-.cpr-notice{margin-top:28px;padding-top:16px;border-top:1px solid #eee}
-.cpr-notice small{color:#adb5bd;font-size:.78rem}
 @media(max-width:600px){.cpr-wrap{padding:10px}.cpr-header h1{font-size:1.3rem}.cpr-price{font-size:1.4rem}.cpr-pctable th,.cpr-pctable td{font-size:.85rem}}
 .section-image{margin:28px 0}
 .section-image img{display:block;max-width:100%;border-radius:10px;box-shadow:0 4px 14px rgba(0,0,0,.12);margin:0 auto}
@@ -109,11 +107,6 @@ jsonLd:
 .cpr-price-card{box-shadow:0 6px 18px rgba(232,89,12,.18)}
 </style>
 
-<div class="cpr-disclosure" style="font-size:.85rem;color:#868e96;margin:0 0 16px;">
-이 포스트는 쿠팡 파트너스 활동의 일환으로, 일정액의 수수료를 제공받을 수 있습니다.
-</div>
-
-
 <!-- ① 핵심 요약 -->
 <div class="cpr-summary">
 <strong>한 줄 평:</strong> {{oneLineReview}}
@@ -121,7 +114,7 @@ jsonLd:
 
 <!-- ② 제품 헤더 -->
 <div class="cpr-header">
-<h1>{{productName}} 솔직 리뷰</h1>
+<h1>{{productName}} 선택 기준 정리</h1>
 <p class="cpr-meta">
 {{#if categoryName}}<span>📂 {{categoryName}}</span>{{/if}}
 {{#if brand}}<span>🏷️ {{brand}}</span>{{/if}}
@@ -129,7 +122,7 @@ jsonLd:
 </p>
 </div>
 
-<!-- 1인칭 경험 도입부 -->
+<!-- 도입부 (기준형) -->
 {{#if experienceIntro}}
 <div class="cpr-experience">{{experienceIntro}}</div>
 {{/if}}
@@ -158,9 +151,8 @@ jsonLd:
 </tr>
 </table>
 
-<!-- ⑤ 상세 리뷰 (1인칭 실사용기) -->
-<div class="cpr-section">
-<h2>제가 직접 써본 상세 후기</h2>
+<!-- ⑤ 상세 리뷰 (스펙·후기 정리) -->
+<h2>상세 스펙과 후기 정리</h2>
 {{#if realUsageStory}}
 <p style="white-space:pre-line">{{realUsageStory}}</p>
 {{else}}
@@ -181,8 +173,8 @@ jsonLd:
 
 {{#if sectionImages.usage}}
 <figure class="section-image">
-<img src="{{sectionImages.usage}}" alt="제가 직접 써본 상세 후기" loading="lazy" />
-<figcaption>제가 직접 써본 상세 후기</figcaption>
+<img src="{{sectionImages.usage}}" alt="이해를 돕기 위한 예시 이미지 (AI 생성)" loading="lazy" />
+<figcaption>이해를 돕기 위한 예시 이미지 (AI 생성)</figcaption>
 </figure>
 {{/if}}
 
@@ -228,12 +220,12 @@ jsonLd:
 <li><a href="{{this.link}}" target="_blank" rel="noopener">{{this.title}}</a> — {{this.bloggername}}</li>
 {{/each}}
 </ul>
-<p>상위 블로그들을 벤치마킹해 보니 공통적으로 강조하는 포인트를 발견할 수 있었어요. 저도 써보고 나서 그 말에 충분히 공감했습니다.</p>
+<p>상위 블로그들을 벤치마킹해 보면 공통적으로 강조하는 포인트가 있습니다. 그 기준이 왜 중요한지는 후기에서 반복되는 지적을 보면 분명해집니다.</p>
 </div>
 </div>
 {{/if}}
 
-<!-- ⑧ 제가 고른 이유 (경험) -->
+<!-- ⑧ 고른 이유 (선택 기준) -->
 {{#if whyIChoseIt}}
 <div class="cpr-section">
 <h2>왜 이 제품을 골랐는지</h2>
@@ -289,7 +281,7 @@ jsonLd:
 </div>
 {{/if}}
 
-<!-- ⑪ 마무리 (경험 결론) -->
+<!-- ⑪ 마무리 (구매 전 점검) -->
 {{#if conclusion}}
 <div class="cpr-section">
 <div class="cpr-final" style="margin-top:0">
@@ -309,9 +301,4 @@ jsonLd:
 </a>
 </div>
 {{/if}}
-
-<!-- ⑬ 파트너스 고지 -->
-<div class="cpr-notice">
-<small>※ 이 포스팅은 쿠팡 파트너스 활동의 일환으로, 이에 따른 일정액의 수수료를 제공받습니다.</small>
-</div>
 </div>

@@ -33,13 +33,13 @@ function getTemplateEngine(): TemplateEngineImpl {
  */
 export function defaultFieldValues(keyword: string): Record<string, unknown> {
   return {
-    experienceIntro: `${keyword}를 오래 찾아보다가 결국 제가 직접 써보게 되었어요. 이 글에는 그때의 솔직한 사용 경험을 담았습니다.`,
-    realUsageStory: `제가 직접 ${keyword}를 사용해 본 결과, 실제로 체감하는 장점과 아쉬운 점을 구체적으로 정리했습니다. 실사용 중심으로 확인해 보세요.`,
-    whyIChoseIt: `여러 대안을 비교한 끝에 ${keyword}를 선택했습니다. 가격 대비 성능과 사용 편의성을 기준으로 비교해 보셔도 좋겠어요.`,
-    conclusion: `${keyword}에 대한 총평을 정리하면, 무난하게 만족스러운 선택이었다고 말씀드릴 수 있습니다. 구매 전 아래 체크리스트도 함께 확인해 보세요.`,
-    description: `${keyword}에 대해 직접 사용해 본 솔직한 후기를 정리했습니다.`,
-    intro: `${keyword}를 찾고 계신가요? 제가 직접 사용해 보고 정리한 기준과 후기를 소개합니다.`,
-    oneLineReview: `${keyword}, 직접 써본 결과 가성비와 편의성의 균형이 괜찮았습니다.`,
+    experienceIntro: `${keyword}를 고를 때 무엇을 먼저 확인해야 할지 정리했습니다. 이 글은 사용 경험담이 아니라 상세페이지와 후기에서 확인할 수 있는 항목을 기준으로 쓴 가이드입니다.`,
+    realUsageStory: `${keyword}를 실제로 쓸 때 체감이 갈리는 지점을 확인 가능한 기준으로 정리했습니다. 후기에서 반복되는 지적을 중심으로 확인해 보세요.`,
+    whyIChoseIt: `여러 대안을 비교할 때 기준이 되는 항목을 정리했습니다. 가격대·기능·사후 관리 조건을 같은 기준으로 놓고 비교해 보세요.`,
+    conclusion: `${keyword}에 대한 정리를 마무리하면, 구매 전 아래 체크리스트를 확인하고 결정하는 편이 안전합니다.`,
+    description: `${keyword}의 선택 기준과 구매 전 확인 사항을 정리한 가이드입니다.`,
+    intro: `${keyword}를 찾고 계신가요? 확인해야 할 기준과 구매 전 점검 항목을 정리했습니다.`,
+    oneLineReview: `${keyword}는 가격대와 기능의 균형을 기준으로 비교해 보는 것이 좋습니다.`,
     pros: ['가성비가 좋음', '사용이 간편함'],
     cons: ['세부 기능 아쉬움'],
     usageTips: [
@@ -56,7 +56,7 @@ export function defaultFieldValues(keyword: string): Record<string, unknown> {
     faqList: [
       {
         question: '초보자도 사용하기 쉬운가요?',
-        answer: '기본 사용법이 간단해서 처음에도 무난하게 사용했습니다.',
+        answer: '기본 사용법이 단순한 제품이 많아 처음 구매자도 부담이 적습니다.',
       },
       {
         question: '가격대는 어느 정도인가요?',
@@ -113,7 +113,7 @@ export function defaultFieldValues(keyword: string): Record<string, unknown> {
       {
         title: '가성비 추천',
         productName: `${keyword} 중급형`,
-        reason: '가격 대비 성능의 균형이 가장 좋았습니다.',
+        reason: '가격 대비 성능의 균형이 좋은 편입니다.',
       },
       {
         title: '입문 추천',
@@ -143,7 +143,7 @@ export function defaultFieldValues(keyword: string): Record<string, unknown> {
     ],
     topPick: {
       productName: `${keyword} 대안 A`,
-      reason: '종합적으로 가격 대비 만족도가 가장 높았습니다.',
+      reason: '종합적으로 가격 대비 만족도가 높은 편입니다.',
       affiliateUrl: '',
     },
     comparisonTable: {

@@ -165,6 +165,86 @@ describe('evaluatePublishedPost / collectPublishedPostFailures', () => {
   });
 });
 
+describe('광고 검증 — adCardCount/adLinks/disclosurePosition (설계 §3-6)', () => {
+  /** 자동 배치 카드 한 장이 SE에서 접히는 모양(이미지 링크 + 상품명 링크 + CTA 링크). */
+  const adCard = (url: string, name: string): string[] => [
+    imageComponent(`https://postfiles.pstatic.net/${name}.jpg`, url),
+    textComponent(name, url),
+    textComponent('🛒 쿠팡에서 보기', url),
+  ];
+  const disclosureComponent = textComponent(
+    '이 포스팅은 쿠팡 파트너스 활동의 일환으로, 이에 따른 일정액의 수수료를 제공받습니다.',
+  );
+
+  const html = wrap(
+    disclosureComponent,
+    textComponent('본문 첫 문단'),
+    ...adCard('https://link.coupang.com/a/A1', '상품 A'),
+    ...adCard('https://link.coupang.com/a/B2', '상품 B'),
+    ...adCard('https://link.coupang.com/a/C3', '상품 C'),
+  );
+
+  it('카드 1장 = 상품 URL 1개로 세고, 고지 위치를 1-based로 기록한다', () => {
+    const summary = summarizePublishedPost(html, inspectPublishedComponents(html), {
+      plannedAdCount: 3,
+    });
+    expect(summary.adCardCount).toBe(3);
+    expect(summary.adLinks).toEqual([
+      'https://link.coupang.com/a/A1',
+      'https://link.coupang.com/a/B2',
+      'https://link.coupang.com/a/C3',
+    ]);
+    expect(summary.disclosureCount).toBe(1);
+    expect(summary.disclosurePosition).toBe(1);
+  });
+
+  it('계획한 광고 수와 발행물 광고 수가 다르면 불합격', () => {
+    const checks = evaluatePublishedPost(
+      summarizePublishedPost(html, inspectPublishedComponents(html), { plannedAdCount: 4 }),
+    );
+    const adCheck = checks.find((c) => c.label === '광고 카드 수가 계획과 일치');
+    expect(adCheck?.pass).toBe(false);
+    expect(adCheck?.detail).toContain('발행물 3개 / 계획 4개');
+  });
+
+  it('계획을 모르면 광고 수는 판정하지 않는다(null, 정보 제공)', () => {
+    const checks = evaluatePublishedPost(
+      summarizePublishedPost(html, inspectPublishedComponents(html)),
+    );
+    expect(checks.find((c) => c.label === '광고 카드 수가 계획과 일치')?.pass).toBeNull();
+  });
+
+  it('고지가 첫 3개 컴포넌트를 벗어나면 불합격', () => {
+    const lateDisclosure = wrap(
+      textComponent('본문 1'),
+      textComponent('본문 2'),
+      textComponent('본문 3'),
+      disclosureComponent,
+      ...adCard('https://link.coupang.com/a/A1', '상품 A'),
+    );
+    const checks = evaluatePublishedPost(
+      summarizePublishedPost(lateDisclosure, inspectPublishedComponents(lateDisclosure), {
+        plannedAdCount: 1,
+      }),
+    );
+    const positionCheck = checks.find((c) => c.label === '파트너스 고지가 첫 3개 컴포넌트 이내');
+    expect(positionCheck?.pass).toBe(false);
+    expect(positionCheck?.detail).toContain('고지 4번째 컴포넌트');
+  });
+
+  it('광고가 없으면 고지도 없어야 통과한다', () => {
+    const noAds = wrap(textComponent('본문만 있는 글'));
+    const summary = summarizePublishedPost(noAds, inspectPublishedComponents(noAds), {
+      plannedAdCount: 0,
+    });
+    expect(summary.adCardCount).toBe(0);
+    expect(summary.disclosurePosition).toBeNull();
+    const checks = evaluatePublishedPost(summary);
+    expect(checks.find((c) => c.label === '파트너스 고지가 첫 3개 컴포넌트 이내')?.pass).toBe(true);
+    expect(checks.find((c) => c.label === '광고 카드 수가 계획과 일치')?.pass).toBe(true);
+  });
+});
+
 describe('fetchPublishedPostDocument — frameset 추적', () => {
   it('본문이 없으면 내부 프레임을 한 번 더 가져온다', async () => {
     const calls: string[] = [];

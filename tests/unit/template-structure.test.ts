@@ -9,7 +9,7 @@ import { splitRaw } from '../../src/web/shared/hbsConvert';
  * 이슈 #23 1-1: 기준 템플릿(naver-coupang-review) 체크리스트를 전 템플릿이 만족하는지 고정한다.
  *  - sectionImages 본문 슬롯 존재
  *  - 제휴 CTA는 {{#if ...affiliateUrl}} 가드 안에서만 렌더 (이슈 #20 원인 C)
- *  - 쿠팡 파트너스 고지 문구 존재
+ *  - 쿠팡 파트너스 고지 문구는 템플릿에 없다(발행 시 Disclosure.ts가 1회 삽입 — 설계 §3-5)
  *  - "향후 구현 예정" 등 미구현 스텁 문구 0회 (#22)
  *  - 최소 데이터로 컴파일·렌더가 예외 없이 끝난다
  */
@@ -91,8 +91,10 @@ describe.each(templateFiles)('%s — 구조 체크리스트', (file) => {
     }
   });
 
-  it('쿠팡 파트너스 고지 문구가 있다', () => {
-    expect(bodyNoComments).toContain('쿠팡 파트너스 활동의 일환');
+  it('쿠팡 파트너스 고지 문구를 템플릿에 두지 않는다', () => {
+    // 고지의 출처는 `src/content/Disclosure.ts` 하나다 — 광고가 있을 때만
+    // 본문 첫 블록에 정확히 1회 삽입된다(설계 §3-5, 이슈 #26).
+    expect(bodyNoComments).not.toMatch(/쿠팡\s*파트너스\s*활동/);
   });
 
   it('미구현 스텁 문구가 없다', () => {

@@ -59,6 +59,20 @@ export interface PublishedPostSummary {
   duplicated: boolean;
   /** 파트너스 고지 문구 노출 횟수 */
   disclosureCount: number;
+  /**
+   * 고지가 첫 3개 컴포넌트 안에 있는지(1-based 위치, 없으면 null).
+   * 공정위 추천·보증 지침은 경제적 이해관계를 게시물 첫 부분에 표시하도록 요구한다.
+   */
+  disclosurePosition: number | null;
+  /**
+   * 광고 카드 수 — 쿠팡 파트너스 링크를 들고 있는 컴포넌트 수.
+   * 자동 배치 카드는 이미지 링크 + 텍스트 링크를 함께 갖는다.
+   */
+  adCardCount: number;
+  /** 광고 카드가 걸고 있는 링크(중복 제거, 문서 순서) */
+  adLinks: string[];
+  /** 발행 전 계획(place-ads 응답)의 광고 수 — 없으면 null */
+  plannedAdCount: number | null;
 }
 
 export interface PublishedPostCheck {
@@ -68,8 +82,35 @@ export interface PublishedPostCheck {
   detail: string;
 }
 
-/** 파트너스 고지 문구 — 카드마다 반복되면 안 된다(실측 발행물에서 4번 노출). */
-const DISCLOSURE_TEXT = '쿠팡 파트너스';
+/** 파트너스 고지 판별은 `@content/Disclosure`가 단일 출처다(설계 §3-5). */
+export { DISCLOSURE_TEXT } from '@content/Disclosure';
+
+import { isDisclosureText } from '@content/Disclosure';
+
+/** 쿠팡 링크인지 — 광고 카드 판정에 쓴다(파트너스 단축 링크·상품 페이지). */
+export function isCoupangAdLink(url: string): boolean {
+  return /^https?:\/\/(?:[\w-]+\.)*coupang\.com\//i.test(url ?? '');
+}
+
+/**
+ * 발행물 광고 검증용 판정 입력 (설계 §3-6).
+ * `plannedAdCount`는 발행 전 계획(place-ads 응답의 상품 수)이다.
+ */
+export interface PublishedAdExpectation {
+  plannedAdCount: number;
+}
+
+/** 발행물에 실린 광고 링크(중복 제거, 문서 순서) — 카드 1개 = 상품 URL 1개. */
+export function collectAdLinks(components: PublishedComponent[]): string[] {
+  const links: string[] = [];
+  for (const component of components) {
+    for (const anchor of component.anchors) {
+      const href = anchor.isImageLink ? anchor.imageLinkHref : anchor.href;
+      if (isCoupangAdLink(href) && !links.includes(href)) links.push(href);
+    }
+  }
+  return links;
+}
 
 /** class 토큰에서 컴포넌트 종류(se-text/se-image/…)를 뽑는다. */
 export function componentType(classAttr: string): string {
@@ -173,6 +214,7 @@ export function detectDuplicatedComponents(components: PublishedComponent[]): bo
 export function summarizePublishedPost(
   html: string,
   components: PublishedComponent[],
+  expected?: PublishedAdExpectation,
 ): PublishedPostSummary {
   const bodyHtml = extractContainerHtml(html);
   const byType: Record<string, number> = {};
@@ -183,6 +225,9 @@ export function summarizePublishedPost(
   const allAnchors = components.flatMap((c) => c.anchors);
   const textLinks = allAnchors.filter((a) => !a.isImageLink);
   const imageLinks = allAnchors.filter((a) => a.isImageLink);
+
+  const adLinks = collectAdLinks(components);
+  const disclosureIndex = components.findIndex((c) => isDisclosureText(c.text));
 
   return {
     total: components.length,
@@ -199,7 +244,12 @@ export function summarizePublishedPost(
     placeholderCount: (bodyHtml.match(PLACEHOLDER_RE) ?? []).length,
     stubCount: (bodyHtml.match(STUB_TEXT_RE) ?? []).length,
     duplicated: detectDuplicatedComponents(components),
-    disclosureCount: components.filter((c) => c.text.includes(DISCLOSURE_TEXT)).length,
+    disclosureCount: components.filter((c) => isDisclosureText(c.text)).length,
+    disclosurePosition: disclosureIndex >= 0 ? disclosureIndex + 1 : null,
+    // 카드 1개 = 상품 URL 1개(이미지 링크와 "쿠팡에서 보기" 텍스트 링크가 같은 URL을 쓴다).
+    adCardCount: adLinks.length,
+    adLinks,
+    plannedAdCount: expected?.plannedAdCount ?? null,
   };
 }
 
@@ -245,6 +295,27 @@ export function evaluatePublishedPost(summary: PublishedPostSummary): PublishedP
       label: '파트너스 고지 문구 1회',
       pass: summary.disclosureCount <= 1,
       detail: `${summary.disclosureCount}회 노출`,
+    },
+    {
+      // 설계 §3-6: "계획한 광고 수 = 발행물 광고 수". 계획을 못 받으면 판정 불가(null).
+      label: '광고 카드 수가 계획과 일치',
+      pass: summary.plannedAdCount === null ? null : summary.adCardCount === summary.plannedAdCount,
+      detail:
+        summary.plannedAdCount === null
+          ? `발행물 ${summary.adCardCount}개 (계획 미제공)`
+          : `발행물 ${summary.adCardCount}개 / 계획 ${summary.plannedAdCount}개`,
+    },
+    {
+      // 공정위 추천·보증 지침: 경제적 이해관계는 게시물 첫 부분에 표시해야 한다.
+      label: '파트너스 고지가 첫 3개 컴포넌트 이내',
+      pass:
+        summary.adCardCount === 0
+          ? summary.disclosureCount === 0
+          : summary.disclosurePosition !== null && summary.disclosurePosition <= 3,
+      detail:
+        summary.disclosurePosition === null
+          ? `고지 위치 없음 (광고 ${summary.adCardCount}개)`
+          : `고지 ${summary.disclosurePosition}번째 컴포넌트 / 광고 ${summary.adCardCount}개`,
     },
     {
       // 자동 판정 불가 — 위치를 출력해 "본문 사이 분산" 여부를 육안 확인하게 한다.

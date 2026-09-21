@@ -8,6 +8,7 @@ import {
   PlatformCategory,
   SchedulerConfig,
   PostContent,
+  PlatformPostContent,
 } from '@core/interfaces';
 import type { AffiliateRegistry } from '@affiliates/registry';
 import type { CronScheduler } from '@scheduler/CronScheduler';
@@ -30,18 +31,39 @@ import {
 } from '@content/ImageGenerator';
 import { buildSectionImageSpecs } from '@content/imagePrompts';
 import { createPostAssembler } from '@content/PostAssembler';
-import { expandCoupangWidgetsReport, normalizeLinkWidgetProps } from '@content/CoupangWidgets';
+import { expandCoupangWidgetsReport } from '@content/CoupangWidgets';
 import { buildPublishPreviewHtml, rewriteLocalImageSrcsForWeb } from '@content/PublishPreview';
-import { addLinkPreset, deleteLinkPreset, loadLinkPresets } from '@content/LinkPresetStore';
 import {
   fillCtaAffiliateUrl,
   liftWidgetMarkers,
-  placePresetsInContent,
   resolveCtaAffiliateUrl,
 } from '@content/WidgetPlacement';
 import { COUPANG_WIDGET_KINDS, type CoupangWidgetKind } from '@content/CoupangWidgets';
-import { fetchLinkPreviewCards, stylePublishHtml } from '@content/CoupangPreview';
+import {
+  collectOfflineAdCards,
+  fetchLinkPreviewCards,
+  stylePublishHtml,
+} from '@content/CoupangPreview';
 import { collectWidgetCardsReport } from '@content/PartnersWidget';
+import { matchAds } from '@content/AdMatcher';
+import { planAdSlots } from '@content/AdPlacement';
+import { ensureDisclosure } from '@content/Disclosure';
+import {
+  checkAdGate,
+  checkAdLinks,
+  checkPublishStructure,
+  collectPlacedAdIds,
+  deriveAdSlots,
+} from '@content/AdGate';
+import { DEFAULT_AD_POLICY, type AdItem, type AdPolicy, type AdSlot } from '@content/AdTypes';
+import {
+  addInventoryFromPaste,
+  getInventoryItem,
+  listInventory,
+  removeInventory,
+  recordInventoryCheck,
+} from '@affiliates/AdInventory';
+import { findRecentlyPublishedRssItem } from '../../../platforms/naver/NaverRss';
 import { generateDraftFromKeyword } from '@content/KeywordPostGenerator';
 import {
   savePostFiles,
@@ -65,6 +87,8 @@ import {
 import * as fs from 'fs';
 import * as path from 'path';
 import * as yaml from 'js-yaml';
+import { createHash } from 'crypto';
+import { registerAdRoutes, trackingLinkFetcher } from './ads';
 import {
   NaverApiHubKeywordProvider,
   sortByPostdateDesc,
@@ -204,6 +228,7 @@ function maskSecrets(value: unknown): unknown {
  * PUT /api/posts/:id에서 편집된 본문을 meta.platformContent의 각 플랫폼 entry에
  * 재구성한다. tistory/naver는 identity, wordpress는 Gutenberg wp:html 블록 래핑
  * (PostAssembler.convertToWordPressBlocks와 동일 포맷).
+ * 제목/태그는 meta 최신값을 따른다 — 로봇이 EDIT 단계에서 PUT한 태그가 발행까지 간다.
  */
 function toPlatformContent(meta: PostFileMeta, content: string): Record<string, unknown> {
   const source = (meta.platformContent || {}) as Record<string, Record<string, unknown>>;
@@ -212,9 +237,83 @@ function toPlatformContent(meta: PostFileMeta, content: string): Record<string, 
     result[key] = {
       ...source[key],
       content: key === 'wordpress' ? `<!-- wp:html -->\n${content}\n<!-- /wp:html -->` : content,
+      ...(meta.tags ? { tags: meta.tags } : {}),
     };
   }
   return result;
+}
+
+/** 발행 직전 HTML의 sha256 — 사람이 승인한 미리보기와 발행본을 같은 값으로 묶는다. */
+function sha256(value: string): string {
+  return createHash('sha256').update(value, 'utf8').digest('hex');
+}
+
+/** 같은 초안(draftId)이 24시간 안에 발행된 적이 있는지 (런북 백로그 ①). */
+function findRecentDuplicateDraft(
+  jobQueue: JobQueueImpl,
+  draftId: string,
+): PublishedPostRow | null {
+  const fromDate = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
+  const rows = jobQueue.getPublishedPosts({ status: 'published', fromDate, limit: 500 });
+  return rows.find((row) => readDraftId(row.metadata) === draftId) ?? null;
+}
+
+/**
+ * 라이브 제목 중복 검사 (런북 백로그 ③) — RSS는 로그인 없이 최근 글 제목을 준다.
+ * 같은 제목이 180일 안에 있으면 그 제목을 돌려준다. RSS를 못 가져오면 null을 돌려주고
+ * 경고만 남긴다(네트워크 장애로 발행 자체가 막히면 안 된다).
+ */
+async function findLiveTitleDuplicate(
+  configManager: ConfigManager,
+  title: string,
+): Promise<string | null> {
+  const blogId = String(configManager.get<{ blogId?: string }>('platforms.naver')?.blogId ?? '');
+  if (!blogId || !title) return null;
+  try {
+    const response = await fetch(`https://rss.blog.naver.com/${encodeURIComponent(blogId)}.xml`, {
+      signal: AbortSignal.timeout(10000),
+    });
+    if (!response.ok) return null;
+    const xml = await response.text();
+    const hit = findRecentlyPublishedRssItem(xml, title, new Date(), 180 * 24 * 60 * 60 * 1000);
+    return hit ? hit.title : null;
+  } catch (error) {
+    logger.warn(
+      { error: String(error) },
+      'Publish: live title duplicate check skipped (RSS unavailable)',
+    );
+    return null;
+  }
+}
+
+/** 발행 흐름이 기록한 metadata(JSON 문자열)에서 draftId를 꺼낸다. */
+function readDraftId(metadata: string | null): string | null {
+  if (!metadata) return null;
+  try {
+    const parsed = JSON.parse(metadata) as { draftId?: unknown };
+    return typeof parsed?.draftId === 'string' ? parsed.draftId : null;
+  } catch {
+    return null;
+  }
+}
+
+/** ad_inventory 행 → 설정 화면의 링크 프리셋 셰이프(이슈 #18 계약 유지). */
+function toLegacyPreset(item: AdItem): {
+  id: string;
+  label: string;
+  kind: string;
+  props: Record<string, string>;
+  createdAt: string;
+} {
+  const props: Record<string, string> = { url: item.url, text: item.productName };
+  if (item.imageUrl) props.imageUrl = item.imageUrl;
+  return {
+    id: item.id,
+    label: item.productName,
+    kind: item.kind,
+    props,
+    createdAt: item.createdAt,
+  };
 }
 // One platform attempt inside the publish response (superset of shared PublishResult:
 // early-failure entries carry no `success` field, matching the historical payload).
@@ -259,6 +358,17 @@ export async function registerRoutes(app: FastifyInstance, context: RouteContext
   // 세트에 id를 넣고, 백그라운드 작업은 저장 직전 이 플래그를 보고 중단한다
   // (완료 후 savePostFiles가 디렉터리를 좀비 부활시키는 것을 방지).
   const cancelledGenerations = new Set<string>();
+
+  // 광고 소재·소재 요청 API (설계 §4-1) — routes/index.ts 비대화를 막기 위해 별도 파일.
+  // registerRoutes는 플러그인 스코프가 아니므로(server/index.ts가 직접 호출) 여기서
+  // 호출한 라우트도 같은 스코프에 붙어 JWT 보호를 그대로 받는다.
+  await registerAdRoutes(app);
+
+  /**
+   * 발행 뮤텍스 — 로봇과 사람이 동시에 발행하면 네이버 브라우저 프로필이 겹쳐
+   * 잠금 충돌·세션 손상이 난다(설계 §4-2). strict 여부와 무관하게 적용한다.
+   */
+  let publishInProgress = false;
 
   // Credential validation hits external APIs; cache results so 30-60s dashboard
   // polling doesn't burn provider quotas on every request.
@@ -1162,7 +1272,11 @@ export async function registerRoutes(app: FastifyInstance, context: RouteContext
 
   app.put('/api/posts/:id', async (request, reply) => {
     const { id } = request.params as { id: string };
-    const { content, title } = request.body as { content?: string; title?: string };
+    const { content, title, tags } = request.body as {
+      content?: string;
+      title?: string;
+      tags?: string[];
+    };
     if (typeof content !== 'string') {
       return reply.code(400).send({ error: 'content is required' });
     }
@@ -1181,6 +1295,10 @@ export async function registerRoutes(app: FastifyInstance, context: RouteContext
 
     const meta = files.meta;
     if (title) meta.title = title;
+    // 태그는 로봇 EDIT 단계가 채운다(설계 §4-1 PUT 확장) — 발행까지 그대로 간다.
+    if (Array.isArray(tags)) {
+      meta.tags = tags.map((tag) => String(tag).trim()).filter((tag) => tag !== '');
+    }
     meta.platformContent = toPlatformContent(meta, content);
     meta.updatedAt = new Date().toISOString();
 
@@ -1281,10 +1399,11 @@ export async function registerRoutes(app: FastifyInstance, context: RouteContext
     }
   });
 
-  // 링크/배너 프리셋 관리(이슈 #18) — 사용자가 직접 등록한 링크/배너만
-  // 발행 시 본문에 자동 배치된다(AI는 임의 링크를 생성하지 않는다).
+  // 링크/배너 프리셋(이슈 #18)은 `ad_inventory`로 흡수됐다(설계 §2-1). 설정 화면의
+  // 응답 계약(id/label/kind/props)은 그대로 두고 저장소만 바꾼다 — 프리셋은 이제
+  // "광고 소재"이고, 발행 시 본문 배치는 주제 매칭(AdMatcher)이 결정한다.
   app.get('/api/link-presets', async () => {
-    return { presets: loadLinkPresets() };
+    return { presets: listInventory({ status: 'active' }).map(toLegacyPreset) };
   });
 
   app.post('/api/link-presets', async (request) => {
@@ -1297,29 +1416,144 @@ export async function registerRoutes(app: FastifyInstance, context: RouteContext
       return { error: `kind must be one of: ${COUPANG_WIDGET_KINDS.join(', ')}` };
     }
     const kind = body.kind as CoupangWidgetKind;
-    let props = body.props ?? {};
-    // 링크류는 저장 시점에 정규화한다 — URL 칸에 파트너스 배너 스니펫이 들어오면
-    // href/이미지/alt를 회수하고, 발행 후 살아남지 못하는 URL이면 저장을 거부한다
-    // (2026-09-07 발행 사고: 스니펫이 그대로 저장돼 죽은 평문으로 발행됐다).
-    if (kind === 'product-link' || kind === 'event-link') {
-      const link = normalizeLinkWidgetProps(kind, props);
-      if (!link) {
-        return { error: 'URL은 http(s) 링크여야 합니다 (파트너스 배너 HTML도 허용됩니다)' };
-      }
-      props = link.imageUrl
-        ? { url: link.url, text: link.text, imageUrl: link.imageUrl }
-        : { url: link.url, text: link.text };
+    // 스니펫 임베드(다이나믹·검색·카테고리 위젯)는 더 이상 등록하지 않는다:
+    // 방문자 문맥이 없어 주제와 무관한 상품이 나온다(이슈 #21, 계획 §3-1).
+    if (kind === 'dynamic-banner' || kind === 'search-widget' || kind === 'category-banner') {
+      return {
+        error:
+          '다이나믹·검색·카테고리 위젯은 주제와 무관한 상품이 나와 더 이상 지원하지 않습니다. "쿠팡 현황 > 광고 소재 관리"에서 파트너스 링크를 등록하세요.',
+      };
     }
-    const preset = addLinkPreset({ label: body.label ?? '', kind, props });
-    return { preset };
+    const props = body.props ?? {};
+    const result = addInventoryFromPaste({
+      paste: props.url ?? '',
+      keywords: body.label ? [body.label] : [],
+      productName: props.text,
+      imageUrl: props.imageUrl,
+      kind,
+    });
+    if (result.ok === false) return { error: result.error };
+    return { preset: toLegacyPreset(result.value) };
   });
 
   app.delete('/api/link-presets/:id', async (request) => {
     const { id } = request.params as { id: string };
-    if (!deleteLinkPreset(id)) {
+    if (!getInventoryItem(id)) {
       return { error: 'Preset not found' };
     }
+    removeInventory(id);
     return { ok: true };
+  });
+
+  // 초안 단계 광고 배치 (설계 §4-1) — 발행 시점이 아니라 여기서 배치를 끝내
+  // 사람이 확인한 미리보기와 발행본이 달라지지 않게 한다. 멱등이다.
+  app.post('/api/posts/:id/place-ads', async (request, reply) => {
+    const { id } = request.params as { id: string };
+    const body = (request.body ?? {}) as {
+      keyword?: string;
+      categoryId?: string;
+      policy?: Partial<AdPolicy>;
+    };
+    const keyword = (body.keyword ?? '').trim();
+    if (!keyword) {
+      return reply.code(400).send({ error: 'keyword is required', field: 'keyword' });
+    }
+    const files = readPostFiles(id);
+    if (!files) {
+      return reply.code(404).send({ error: 'Post not found' });
+    }
+
+    const policy: AdPolicy = { ...DEFAULT_AD_POLICY, ...(body.policy ?? {}) };
+    const inventory = listInventory({ status: 'active' });
+    const ranked = matchAds({ keyword, categoryId: body.categoryId }, inventory);
+    const plan = planAdSlots(files.content, ranked, policy);
+    // 고지도 함께 넣는다 — 광고가 있으면 정확히 1회, 없으면 0회(설계 §3-5).
+    const html = ensureDisclosure(plan.html, plan.slots.length > 0);
+
+    fs.writeFileSync(`./output/posts/${id}/post.html`, html);
+    const meta = files.meta;
+    meta.platformContent = toPlatformContent(meta, html);
+    meta.updatedAt = new Date().toISOString();
+    fs.writeFileSync(`./output/posts/${id}/meta.json`, JSON.stringify(meta, null, 2));
+
+    logger.info(
+      { postId: id, slots: plan.slots.length, ads: ranked.length },
+      'place-ads: automatic ad slots placed into draft',
+    );
+    return {
+      html,
+      slots: plan.slots,
+      ads: ranked.map((entry) => ({ ...entry.ad, score: entry.score, matchedBy: entry.matchedBy })),
+      disclosure: plan.slots.length > 0,
+      notes: plan.notes,
+    };
+  });
+
+  // 발행 전 게이트 (설계 §4-1) — 파일을 바꾸지 않는다. 미리보기 sha256을 돌려주고
+  // 그 값을 그대로 strict 발행이 검증한다. checkLinks면 광고 링크 생존까지 본다.
+  app.post('/api/posts/:id/gate', async (request, reply) => {
+    const { id } = request.params as { id: string };
+    const body = (request.body ?? {}) as {
+      expectedSlots?: AdSlot[];
+      checkLinks?: boolean;
+      keyword?: string;
+      categoryId?: string;
+    };
+    const files = readPostFiles(id);
+    if (!files) {
+      return reply.code(404).send({ error: 'Post not found' });
+    }
+
+    const inventory = listInventory({});
+    const placedIds = collectPlacedAdIds(files.content);
+    const placedAds = placedIds
+      .map((adId) => inventory.find((item) => item.id === adId))
+      .filter((item): item is AdItem => Boolean(item));
+
+    const violations = [
+      ...checkAdGate(files.content, {
+        // 로봇이 계획(place-ads 응답)을 그대로 넘기면 그 계획과 대조하고,
+        // 아니면 초안 마커에서 블록 구성을 도출해 대조한다.
+        slots: body.expectedSlots ?? deriveAdSlots(files.content),
+        inventory,
+        topic: body.keyword ? { keyword: body.keyword, categoryId: body.categoryId } : undefined,
+      }),
+    ];
+
+    // 발행 변환 체인을 적용한 HTML에서 구조 검사(런북 백로그 ④)를 돌린다 —
+    // 확장되지 않은 마커·script/iframe·⟦IMGn⟧·스텁 문구는 발행 직전에 잡아야 한다.
+    const publishHtml = buildPublishPreviewHtml(files.content, 'naver');
+    violations.push(...checkPublishStructure(publishHtml));
+
+    if (body.checkLinks && placedAds.length > 0) {
+      const checks = await checkAdLinks(placedAds, trackingLinkFetcher);
+      for (const check of checks) {
+        recordInventoryCheck(check.id, {
+          ok: check.ok,
+          status: check.status,
+          location: check.location,
+          checkedAt: new Date().toISOString(),
+        });
+        if (!check.ok) {
+          violations.push({
+            code: 'AD_LINK_DEAD',
+            message: `광고 링크가 살아있지 않다: ${check.url} (${check.reason ?? 'unknown'})`,
+            detail: { adId: check.id, status: check.status, location: check.location },
+          });
+        }
+      }
+    }
+
+    const previewSha256 = sha256(publishHtml);
+    const previewHtmlPath = `./output/posts/${id}/publish-preview.html`;
+    fs.writeFileSync(previewHtmlPath, publishHtml);
+
+    return {
+      ok: violations.length === 0,
+      violations,
+      previewSha256,
+      previewHtmlPath,
+    };
   });
 
   // 발행 미리보기(이슈 #17) — 편집 화면이 실제 발행물과 동일한 렌더링을 볼 수 있게
@@ -1339,232 +1573,329 @@ export async function registerRoutes(app: FastifyInstance, context: RouteContext
     return { html, platform: targetPlatform };
   });
 
-  app.post('/api/posts/:id/publish', async (request) => {
+  app.post('/api/posts/:id/publish', async (request, reply) => {
     const { id } = request.params as { id: string };
     // visibility: 비공개 발행 지원. 발행 파이프라인 변경을 실제 블로그에서 검증할 때
     // 공개 노출 없이 확인하기 위한 옵션이다(미지정 시 기존대로 공개).
-    const { platform, visibility } = request.body as {
+    // strict: 로봇 전용 경로 — 사람이 승인한 미리보기 sha를 검증하고, 발행본을 바꾸는
+    // 단계(AI 다듬기·프리셋 배치·CTA 채우기)를 전부 건너뛴다(설계 §4-2).
+    const body = (request.body ?? {}) as {
       platform?: string;
       visibility?: 'public' | 'private';
+      aiPolish?: boolean;
+      strict?: boolean;
+      expectedPreviewSha256?: string;
+      robotRunId?: string;
     };
+    const { platform, visibility, strict, expectedPreviewSha256, robotRunId } = body;
 
-    const postPath = `./output/posts/${id}/meta.json`;
-    const fs = await import('fs');
-
-    if (!fs.existsSync(postPath)) {
-      return { error: 'Post not found' };
+    if (strict && body.aiPolish === true) {
+      return reply.code(400).send({
+        error: 'strict 발행에서는 aiPolish를 쓸 수 없습니다',
+        code: 'AI_POLISH_FORBIDDEN',
+      });
+    }
+    if (strict && !expectedPreviewSha256) {
+      return reply.code(400).send({
+        error: 'strict 발행에는 expectedPreviewSha256이 필요합니다',
+        code: 'PREVIEW_SHA_REQUIRED',
+      });
+    }
+    if (publishInProgress) {
+      // 같은 브라우저 프로필을 두 요청이 열면 잠금 충돌·세션 손상이 난다(설계 §4-2).
+      return reply.code(423).send({
+        error: '다른 발행이 진행 중입니다',
+        code: 'PUBLISH_IN_PROGRESS',
+      });
     }
 
-    const postMeta = JSON.parse(fs.readFileSync(postPath, 'utf-8'));
-    let content = fs.readFileSync(`./output/posts/${id}/post.html`, 'utf-8');
+    publishInProgress = true;
+    try {
+      const postPath = `./output/posts/${id}/meta.json`;
+      if (!fs.existsSync(postPath)) {
+        return reply.code(404).send({ error: 'Post not found' });
+      }
 
-    // AI 최종 다듬기(이슈 #12) — 기본 ON, body.aiPolish === false로 끈다.
-    const { aiPolish: aiPolishOpt } = request.body as { aiPolish?: boolean };
-    const aiPolish = aiPolishOpt !== false;
-    if (aiPolish) {
-      try {
-        const generator = new ContentGenerator(resolveLlmConfigFromConfigManager());
-        const polished = await generator.polishForPublish(content);
-        if (polished && polished !== content) {
-          content = polished;
-          // 다듬어진 최종본을 저장해 편집화면에서도 동일 버전을 유지한다.
+      const postMeta = JSON.parse(fs.readFileSync(postPath, 'utf-8')) as Omit<
+        PostFileMeta,
+        'platformContent'
+      > & { platformContent?: Record<string, PlatformPostContent> };
+      // 발행 파이프라인은 플랫폼별 본문을 직접 고친다(다듬기·CTA 채우기) — 맵을 고정해 둔다.
+      const platformContentMap = (postMeta.platformContent ??= {});
+      let content = fs.readFileSync(`./output/posts/${id}/post.html`, 'utf-8');
+
+      const targetPlatforms = platform ? [platform] : Object.keys(platformContentMap);
+      if (targetPlatforms.length === 0) {
+        return reply.code(400).send({ error: '발행할 플랫폼이 없습니다', code: 'NO_PLATFORM' });
+      }
+      if (strict && targetPlatforms.length !== 1) {
+        // 미리보기 sha는 플랫폼별로 다르다 — strict는 한 번에 한 플랫폼만 발행한다.
+        return reply.code(400).send({
+          error: 'strict 발행은 platform을 하나만 지정해야 합니다',
+          code: 'STRICT_MULTI_PLATFORM',
+        });
+      }
+
+      // strict 1) 미리보기 sha 대조 (설계 §4-2 2). 오프라인 렌더를 쓴다 —
+      // 네트워크 조회 결과가 섞이면 같은 초안도 발행 시점에 다른 sha가 나온다.
+      let strictHtml = '';
+      if (strict) {
+        strictHtml = buildPublishPreviewHtml(content, targetPlatforms[0]);
+        const actualSha = sha256(strictHtml);
+        if (actualSha !== expectedPreviewSha256) {
+          return reply.code(409).send({
+            error: '미리보기 이후 초안이 바뀌었습니다. 게이트를 다시 실행하세요',
+            code: 'PREVIEW_CHANGED',
+            previewSha256: actualSha,
+          });
+        }
+      }
+
+      // 중복 검사 (설계 §4-2 3) — 같은 초안 재발행은 strict 여부와 무관하게 막는다.
+      const duplicateDraft = findRecentDuplicateDraft(jobQueue, id);
+      if (duplicateDraft) {
+        return reply.code(409).send({
+          error: `최근 24시간 안에 같은 초안이 발행됐습니다(${duplicateDraft.published_at})`,
+          code: 'DUPLICATE_DRAFT',
+        });
+      }
+      if (strict) {
+        // 라이브 제목 대조(런북 백로그 ③) — RSS를 못 가져오면 경고만 남기고 진행한다.
+        const duplicateTitle = await findLiveTitleDuplicate(configManager, postMeta.title);
+        if (duplicateTitle) {
+          return reply.code(409).send({
+            error: `블로그에 같은 제목의 글이 최근 180일 안에 있습니다: ${duplicateTitle}`,
+            code: 'DUPLICATE_TITLE',
+          });
+        }
+        // 게이트 재실행 (설계 §4-2 4) — 링크 검사는 제외한다(이미 GATE에서 확인했다).
+        const violations = [
+          ...checkAdGate(content, { slots: deriveAdSlots(content), inventory: listInventory({}) }),
+          ...checkPublishStructure(strictHtml),
+        ];
+        if (violations.length > 0) {
+          return reply.code(422).send({
+            error: '발행 전 게이트를 통과하지 못했습니다',
+            code: 'GATE_FAILED',
+            violations,
+          });
+        }
+      }
+
+      // AI 최종 다듬기(이슈 #12) — 기본 ON, body.aiPolish === false로 끈다.
+      // strict는 발행본을 바꾸지 않는다(승인한 미리보기와 달라지면 안 된다).
+      const aiPolish = !strict && body.aiPolish !== false;
+      if (aiPolish) {
+        try {
+          const generator = new ContentGenerator(resolveLlmConfigFromConfigManager());
+          const polished = await generator.polishForPublish(content);
+          if (polished && polished !== content) {
+            content = polished;
+            // 다듬어진 최종본을 저장해 편집화면에서도 동일 버전을 유지한다.
+            fs.writeFileSync(`./output/posts/${id}/post.html`, content);
+            for (const key of Object.keys(platformContentMap || {})) {
+              platformContentMap[key].content = content;
+            }
+            fs.writeFileSync(postPath, JSON.stringify(postMeta, null, 2));
+          }
+        } catch (error) {
+          // LLM 미설정/실패 시 원본으로 계속 진행한다(발행이 막히지 않게 한다).
+          logger.warn({ postId: id, error: String(error) }, 'Publish-time AI polish skipped');
+        }
+      }
+
+      // strict는 발행본을 바꾸는 단계(프리셋 배치·CTA 채우기·마커 승격)를 건너뛴다 —
+      // 사람이 승인한 미리보기와 발행본이 달라지면 안 된다(설계 §4-2 5).
+      if (!strict) {
+        const contentBeforeFixups = content;
+        // 마커가 <figure>/<p> 안에 갇혀 있으면 SE가 앞 사진의 캡션으로 흡수한다
+        // (실측 logNo 224404059950 #17) — 블록 최상위로 끌어올린 뒤 확장한다.
+        const lifted = liftWidgetMarkers(content);
+        if (lifted !== content) {
+          content = lifted;
+          logger.info({ postId: id }, 'Publish: widget markers lifted out of inline containers');
+        }
+
+        // CTA 제휴 URL 채우기(이슈 #20 원인 C) — 템플릿은 affiliateUrl이 비어 있으면
+        // CTA 자체를 렌더하지 않는다. 본문의 첫 유효 product-link 마커(자동 광고 포함)
+        // 또는 글 메타에서 URL을 얻어 죽은 CTA 앵커(href ''/'#')에 채운다.
+        const ctaUrl = resolveCtaAffiliateUrl(content, postMeta.affiliateUrl);
+        if (ctaUrl) {
+          const filled = fillCtaAffiliateUrl(content, ctaUrl);
+          if (filled !== content) {
+            content = filled;
+            logger.info({ postId: id }, 'Publish: CTA affiliate url filled');
+          }
+        }
+
+        if (content !== contentBeforeFixups) {
           fs.writeFileSync(`./output/posts/${id}/post.html`, content);
-          for (const key of Object.keys(postMeta.platformContent || {})) {
-            postMeta.platformContent[key].content = content;
+          for (const key of Object.keys(platformContentMap || {})) {
+            platformContentMap[key].content = content;
           }
           fs.writeFileSync(postPath, JSON.stringify(postMeta, null, 2));
         }
-      } catch (error) {
-        // LLM 미설정/실패 시 원본으로 계속 진행한다(발행이 막히지 않게 한다).
-        logger.warn({ postId: id, error: String(error) }, 'Publish-time AI polish skipped');
-      }
-    }
-
-    // 사용자 등록 링크/배너 프리셋 자동 배치(이슈 #18) — AI polish 이후 실행해
-    // AI가 프리셋 마커를 임의로 지우거나 재배치하지 못하게 한다. 본문에 위젯이
-    // 이미 있으면(사용자 직접 삽입) 배치하지 않는다.
-    const presets = loadLinkPresets();
-    const contentBeforePresets = content;
-    const placement = placePresetsInContent(content, presets);
-    if (placement.placed.length > 0) {
-      content = placement.html;
-      logger.info(
-        { postId: id, placed: placement.placed },
-        'Publish: user link presets placed into content',
-      );
-    }
-
-    // CTA 제휴 URL 채우기(이슈 #20 원인 C) — 생성 시점엔 affiliateUrl이 비어 있어
-    // 템플릿이 CTA 자체를 렌더하지 않는다(T6). 사용자가 등록한 첫 product-link
-    // 프리셋 URL이 있으면 본문 속 죽은 CTA 앵커(href ''/'#')에 실제 링크를 채운다.
-    // 프리셋이 없으면 생략한다 — CTA는 없는 상태로 발행된다(죽은 버튼 방지).
-    // 마커가 <figure>/<p> 안에 갇혀 있으면 SE가 앞 사진의 캡션으로 흡수한다
-    // (실측 logNo 224404059950 #17) — 블록 최상위로 끌어올린 뒤 확장한다.
-    const lifted = liftWidgetMarkers(content);
-    if (lifted !== content) {
-      content = lifted;
-      logger.info({ postId: id }, 'Publish: widget markers lifted out of inline containers');
-    }
-
-    // CTA에 채울 제휴 URL: 프리셋 → 본문의 첫 유효 product-link 마커 → 글 메타.
-    // 프리셋만 보던 기존 로직은 프리셋이 0개일 때 CTA를 통째로 잃었다(실측).
-    const ctaUrl = resolveCtaAffiliateUrl(presets, content, postMeta.affiliateUrl);
-    if (ctaUrl) {
-      const filled = fillCtaAffiliateUrl(content, ctaUrl);
-      if (filled !== content) {
-        content = filled;
-        logger.info({ postId: id }, 'Publish: CTA affiliate url filled from link preset');
-      }
-    }
-
-    if (content !== contentBeforePresets) {
-      fs.writeFileSync(`./output/posts/${id}/post.html`, content);
-      for (const key of Object.keys(postMeta.platformContent || {})) {
-        postMeta.platformContent[key].content = content;
-      }
-      fs.writeFileSync(postPath, JSON.stringify(postMeta, null, 2));
-    }
-
-    const targetPlatforms = platform ? [platform] : Object.keys(postMeta.platformContent || {});
-
-    const results: PublishAttempt[] = [];
-
-    for (const platformName of targetPlatforms) {
-      const adapter = platformRegistry.getAdapter(platformName);
-      if (!adapter) {
-        results.push({ platform: platformName, error: 'Platform adapter not found' });
-        continue;
       }
 
-      const platformContent = postMeta.platformContent?.[platformName] || {
-        title: postMeta.title,
-        content,
-        tags: postMeta.tags,
-        categories: postMeta.categories,
-        meta: postMeta.meta,
-        visibility: 'public',
-        allowComments: true,
-      };
-      if (visibility) platformContent.visibility = visibility;
+      const results: PublishAttempt[] = [];
 
-      // 1) 링크 미리보기 카드 수집(이슈 #12) — product-link/event-link URL을 읽어
-      //    상품 이미지·가격·평점 카드를 만든다. 실패 시 해당 링크만 텍스트 링크로 폴백.
-      const coupangAdapter = affiliateRegistry.getAdapter('coupang');
-      const previewCards = await fetchLinkPreviewCards(
-        platformContent.content,
-        coupangAdapter ?? undefined,
-      ).catch(() => new Map<number, string>());
+      for (const platformName of targetPlatforms) {
+        const adapter = platformRegistry.getAdapter(platformName);
+        if (!adapter) {
+          results.push({ platform: platformName, error: 'Platform adapter not found' });
+          continue;
+        }
 
-      // 1-b) 임베드 위젯 → 실제 상품 카드 수집(이슈 #20 T4). 네이버는 iframe을
-      //    100% 제거하므로(원인 B) 파트너스 위젯 자리엔 인라인 상품 카드를 발행한다.
-      //    마커별 네트워크 실패는 격리되고, 카드를 못 만든 마커만 drop으로 기록된다.
-      const widgetReportCards = await collectWidgetCardsReport(platformContent.content).catch(
-        (error: unknown) => {
-          logger.warn(
-            { postId: id, platform: platformName, error: String(error) },
-            'Publish: partners widget card collection failed',
+        const platformContent = platformContentMap?.[platformName] || {
+          title: postMeta.title,
+          content,
+          tags: postMeta.tags,
+          categories: postMeta.categories,
+          meta: postMeta.meta,
+          visibility: 'public',
+          allowComments: true,
+        };
+        if (visibility) platformContent.visibility = visibility;
+
+        // 프론트엔드에 위젯 유실 경고를 전달한다(이슈 #15).
+        const widgetWarnings: string[] = [];
+
+        if (strict) {
+          // 검증한 미리보기를 그대로 보낸다 — 자동 광고는 인벤토리 props만으로 만든
+          // 오프라인 카드이고, 확장·스타일·평탄화가 이미 끝난 문자열이다(설계 §3-4).
+          platformContent.content = strictHtml;
+        } else {
+          // 1) 링크 미리보기 카드 수집(이슈 #12) — product-link/event-link URL을 읽어
+          //    상품 이미지·가격·평점 카드를 만든다. 자동 광고는 네트워크를 조회하지
+          //    않고 인벤토리 props만으로 만든 카드를 먼저 깔고, 사용자 위젯용
+          //    네트워크 카드를 그 위에 덮는다(설계 §3-4).
+          const coupangAdapter = affiliateRegistry.getAdapter('coupang');
+          const offlineCards = collectOfflineAdCards(platformContent.content);
+          const previewCards = await fetchLinkPreviewCards(
+            platformContent.content,
+            coupangAdapter ?? undefined,
+          ).catch(() => new Map<number, string>());
+          const mergedPreviewCards = new Map<number, string>([...offlineCards, ...previewCards]);
+
+          // 1-b) 임베드 위젯 → 실제 상품 카드 수집(이슈 #20 T4). 네이버는 iframe을
+          //    100% 제거하므로(원인 B) 파트너스 위젯 자리엔 인라인 상품 카드를 발행한다.
+          //    마커별 네트워크 실패는 격리되고, 카드를 못 만든 마커만 drop으로 기록된다.
+          const widgetReportCards = await collectWidgetCardsReport(platformContent.content).catch(
+            (error: unknown) => {
+              logger.warn(
+                { postId: id, platform: platformName, error: String(error) },
+                'Publish: partners widget card collection failed',
+              );
+              return { cards: new Map<number, string>(), placements: [] };
+            },
           );
-          return { cards: new Map<number, string>(), placements: [] };
-        },
-      );
-      const widgetCards = widgetReportCards.cards;
 
-      // 2) 위젯 마커 확장 — 사전 수집한 카드(미리보기 #12 / 위젯 상품 카드 #20)로
-      //    마커를 치환하고, 발행 시점에는 위젯을 중앙 정렬 컨테이너로 감싼다(#12).
-      //    drop 리포트로 유실된 위젯을 추적한다(이슈 #15 — 조용한 유실 방지).
-      const widgetReport = expandCoupangWidgetsReport(platformContent.content, {
-        platform: platformName,
-        previewCards,
-        widgetCards,
-      });
-      if (widgetReport.dropped.length > 0) {
-        logger.warn(
-          { postId: id, platform: platformName, dropped: widgetReport.dropped },
-          'Publish: coupang widgets dropped during expansion',
-        );
-      }
+          // 2) 위젯 마커 확장 — 사전 수집한 카드(오프라인 광고 #3-4 / 미리보기 #12 /
+          //    위젯 상품 카드 #20)로 마커를 치환한다.
+          const widgetReport = expandCoupangWidgetsReport(platformContent.content, {
+            platform: platformName,
+            previewCards: mergedPreviewCards,
+            widgetCards: widgetReportCards.cards,
+          });
+          if (widgetReport.dropped.length > 0) {
+            logger.warn(
+              { postId: id, platform: platformName, dropped: widgetReport.dropped },
+              'Publish: coupang widgets dropped during expansion',
+            );
+          }
 
-      // 3) 발행 시점 전 위젯/이미지 스타일 정리(이슈 #12)
-      platformContent.content = stylePublishHtml(widgetReport.html);
+          // 3) 발행 시점 전 위젯/이미지 스타일 정리(이슈 #12)
+          platformContent.content = stylePublishHtml(widgetReport.html);
 
-      // 발행 직후 잔존 마커 검증(이슈 #15) — 확장되지 않은 마커가 남으면
-      // 에디터→발행물 유실 가능성이 있으므로 명시적으로 기록한다.
-      const leftoverMarkers = (platformContent.content.match(/data-coupang-widget/g) ?? []).length;
-      if (leftoverMarkers > 0) {
-        logger.error(
-          { postId: id, platform: platformName, leftoverMarkers },
-          'Publish: unexpanded coupang widget markers remain after expansion',
-        );
-      }
+          // 발행 직후 잔존 마커 검증(이슈 #15) — 확장되지 않은 마커가 남으면
+          // 에디터→발행물 유실 가능성이 있으므로 명시적으로 기록한다.
+          const leftoverMarkers = (platformContent.content.match(/data-coupang-widget/g) ?? [])
+            .length;
+          if (leftoverMarkers > 0) {
+            logger.error(
+              { postId: id, platform: platformName, leftoverMarkers },
+              'Publish: unexpanded coupang widget markers remain after expansion',
+            );
+          }
+          widgetWarnings.push(...widgetReport.dropped.map((d) => `${d.kind}: ${d.reason}`));
+          if (leftoverMarkers > 0) {
+            widgetWarnings.push(`unexpanded markers: ${leftoverMarkers}`);
+          }
+          // 파트너스 위젯은 방문자 문맥 없이 서버에서 조회하면 글 주제와 무관한
+          // 베스트셀러를 돌려준다(실측: 청바지 리뷰에 쌀·화장지). 무엇이 실리는지
+          // 발행 결과에 그대로 노출해 사용자가 판단할 수 있게 한다.
+          for (const placement of widgetReportCards.placements) {
+            widgetWarnings.push(
+              `[확인] ${placement.kind} 자리 상품: ${placement.names.join(', ')}`,
+            );
+          }
+        }
 
-      // 프론트엔드에 위젯 유실 경고를 전달한다(이슈 #15).
-      const widgetWarnings: string[] = widgetReport.dropped.map((d) => `${d.kind}: ${d.reason}`);
-      if (leftoverMarkers > 0) {
-        widgetWarnings.push(`unexpanded markers: ${leftoverMarkers}`);
-      }
-      // 파트너스 위젯은 방문자 문맥 없이 서버에서 조회하면 글 주제와 무관한
-      // 베스트셀러를 돌려준다(실측: 청바지 리뷰에 쌀·화장지). 무엇이 실리는지
-      // 발행 결과에 그대로 노출해 사용자가 판단할 수 있게 한다.
-      for (const placement of widgetReportCards.placements) {
-        widgetWarnings.push(`[확인] ${placement.kind} 자리 상품: ${placement.names.join(', ')}`);
-      }
+        // #7: 발행 대상 이미지 로컬 경로 수집 (meta.images → post.html <img> 폴백) —
+        // 네이버 등 브라우저 발행 어댑터가 에디터에 업로드한다.
+        if (!platformContent.images || platformContent.images.length === 0) {
+          const localImagePaths = resolvePostImagePaths(postMeta.images, content);
+          if (localImagePaths.length > 0) {
+            platformContent.images = localImagePaths.map((p) => ({ localPath: p, altText: '' }));
+          }
+        }
 
-      // #7: 발행 대상 이미지 로컬 경로 수집 (meta.images → post.html <img> 폴백) —
-      // 네이버 등 브라우저 발행 어댑터가 에디터에 업로드한다.
-      if (!platformContent.images || platformContent.images.length === 0) {
-        const localImagePaths = resolvePostImagePaths(postMeta.images, content);
-        if (localImagePaths.length > 0) {
-          platformContent.images = localImagePaths.map((p) => ({ localPath: p, altText: '' }));
+        try {
+          const result = await adapter.createPost(platformContent);
+          // 이미지 업로드 실패 등 어댑터 경고를 사용자에게 전달한다(이슈 #19).
+          const adapterWarnings = (result.warnings ?? []).map((w) => `image: ${w}`);
+          jobQueue.recordPublishedPost({
+            platform: platformName,
+            postId: result.postId,
+            url: result.url,
+            title: postMeta.title,
+            template: postMeta.template,
+            productId: postMeta.productId,
+            affiliateUrl: postMeta.affiliateUrl,
+            status: 'published',
+            // draftId: 편집화면 재진입/재발행용 드래프트 디렉터리 id (이슈 #10)
+            metadata: {
+              result,
+              draftId: id,
+              ...(strict ? { previewSha256: expectedPreviewSha256 } : {}),
+              ...(robotRunId ? { robotRunId } : {}),
+            },
+          });
+          results.push({
+            platform: platformName,
+            ...result,
+            success: true,
+            widgetWarnings,
+            warnings: [...widgetWarnings, ...adapterWarnings],
+          });
+        } catch (error) {
+          jobQueue.recordPublishedPost({
+            platform: platformName,
+            postId: id,
+            url: '',
+            title: postMeta.title,
+            template: postMeta.template,
+            productId: postMeta.productId,
+            affiliateUrl: postMeta.affiliateUrl,
+            status: 'failed',
+            // draftId: 실패 포스트도 편집화면에서 재발행할 수 있게 기록한다(이슈 #10)
+            metadata: { error: String(error), draftId: id },
+          });
+          results.push({ platform: platformName, error: String(error), success: false });
         }
       }
 
-      try {
-        const result = await adapter.createPost(platformContent);
-        // 이미지 업로드 실패 등 어댑터 경고를 사용자에게 전달한다(이슈 #19).
-        const adapterWarnings = (result.warnings ?? []).map((w) => `image: ${w}`);
-        jobQueue.recordPublishedPost({
-          platform: platformName,
-          postId: result.postId,
-          url: result.url,
-          title: postMeta.title,
-          template: postMeta.template,
-          productId: postMeta.productId,
-          affiliateUrl: postMeta.affiliateUrl,
-          status: 'published',
-          // draftId: 편집화면 재진입/재발행용 드래프트 디렉터리 id (이슈 #10)
-          metadata: { result, draftId: id },
-        });
-        results.push({
-          platform: platformName,
-          ...result,
-          success: true,
-          widgetWarnings,
-          warnings: [...widgetWarnings, ...adapterWarnings],
-        });
-      } catch (error) {
-        jobQueue.recordPublishedPost({
-          platform: platformName,
-          postId: id,
-          url: '',
-          title: postMeta.title,
-          template: postMeta.template,
-          productId: postMeta.productId,
-          affiliateUrl: postMeta.affiliateUrl,
-          status: 'failed',
-          // draftId: 실패 포스트도 편집화면에서 재발행할 수 있게 기록한다(이슈 #10)
-          metadata: { error: String(error), draftId: id },
-        });
-        results.push({ platform: platformName, error: String(error), success: false });
+      // 게시 성공을 로컬 meta.json에 기록한다 — DELETE /api/posts/:id가 게시된 포스트를
+      // 거부하고, 목록의 드래프트/게시 구분이 가능해진다.
+      if (results.some((r) => r.success)) {
+        updatePostMeta(id, { status: 'PUBLISHED', updatedAt: new Date().toISOString() });
       }
-    }
 
-    // 게시 성공을 로컬 meta.json에 기록한다 — DELETE /api/posts/:id가 게시된 포스트를
-    // 거부하고, 목록의 드래프트/게시 구분이 가능해진다.
-    if (results.some((r) => r.success)) {
-      updatePostMeta(id, { status: 'PUBLISHED', updatedAt: new Date().toISOString() });
+      return { results };
+    } finally {
+      // 클라이언트(로봇)가 연결을 끊어도 핸들러는 끝까지 실행되고, 락은 여기서 풀린다.
+      publishInProgress = false;
     }
-
-    return { results };
   });
 
   // Scheduler

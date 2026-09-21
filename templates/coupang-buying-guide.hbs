@@ -27,9 +27,6 @@ seo:
 ---
 
 <div class="cbg-wrap">
-<div class="cbg-disclosure" style="font-size:.85rem;color:#868e96;margin:0 0 16px;">
-이 포스트는 쿠팡 파트너스 활동의 일환으로, 일정액의 수수료를 제공받을 수 있습니다.
-</div>
 
 <!-- 헤더 -->
 <div class="cbg-header">
@@ -37,11 +34,11 @@ seo:
 <p class="cbg-sub">{{currentYear}}년 최신 · 체크리스트 + 예산별 추천</p>
 </div>
 
-<!-- 1인칭 경험 도입부 (LLM 생성, 없으면 정적 카피) -->
+<!-- 도입부 (LLM 생성값, 없으면 기준형 정적 카피) -->
 {{#if experienceIntro}}
 <div class="cbg-experience">{{experienceIntro}}</div>
 {{else}}
-<div class="cbg-intro">저도 처음 {{categoryName}} 살 때는 막막했는데, 직접 여러 개 비교해 보니 기준이 생기더라고요. 아래는 제가 겪어보고 정리한 기준입니다.</div>
+<div class="cbg-intro">{{categoryName}}를 처음 고를 때는 어디부터 확인해야 할지 막막할 수 있습니다. 그래서 매장과 상세페이지에서 확인할 수 있는 기준을 순서대로 정리했습니다.</div>
 {{/if}}
 
 <!-- 체크리스트 -->
@@ -96,18 +93,18 @@ seo:
 </div>
 {{/if}}
 
-<!-- 제가 고른 이유 (경험) -->
+<!-- 고른 이유 (선택 기준) -->
 {{#if whyIChoseIt}}
 <div class="cbg-section">
-<h2>제가 이걸로 골라본 경험</h2>
+<h2>고를 때 비교한 기준</h2>
 <div class="cbg-why">{{whyIChoseIt}}</div>
 </div>
 {{/if}}
 
 {{#if sectionImages.usage}}
 <figure class="section-image">
-<img src="{{sectionImages.usage}}" alt="제가 이걸로 골라본 경험" loading="lazy" />
-<figcaption>제가 이걸로 골라본 경험</figcaption>
+<img src="{{sectionImages.usage}}" alt="이해를 돕기 위한 예시 이미지 (AI 생성)" loading="lazy" />
+<figcaption>이해를 돕기 위한 예시 이미지 (AI 생성)</figcaption>
 </figure>
 {{/if}}
 
@@ -133,7 +130,7 @@ seo:
 <li><a href="{{this.link}}" target="_blank" rel="noopener">{{this.title}}</a> — {{this.bloggername}}</li>
 {{/each}}
 </ul>
-<p>상위 블로그들을 둘러보니 공통적으로 강조하는 포인트가 있었어요. 저도 써보고 나서 그 기준이 왜 중요한지 충분히 이해할 수 있었습니다.</p>
+<p>상위 블로그들을 살펴보면 공통적으로 강조하는 포인트가 있습니다. 그 기준이 왜 중요한지는 실제 후기에서 반복되는 지적을 보면 분명해집니다.</p>
 </div>
 </div>
 {{/if}}
@@ -188,16 +185,13 @@ seo:
 </div>
 {{/if}}
 
-<!-- 마무리 (경험 결론) -->
+<!-- 마무리 (구매 전 점검) -->
 {{#if conclusion}}
 <div class="cbg-final">
 <p>{{conclusion}}</p>
 </div>
 {{/if}}
 
-<!-- 파트너스 고지 -->
-<div class="cbg-notice">
-<small>※ 이 포스팅은 쿠팡 파트너스 활동의 일환으로, 이에 따른 일정액의 수수료를 제공받습니다.</small>
 </div>
 </div>
 
@@ -238,8 +232,6 @@ seo:
 .cbg-benchmarks a{color:#4527a0;text-decoration:none}
 .cbg-benchmarks a:hover{text-decoration:underline}
 .cbg-final{text-align:center;margin:32px 0;padding:22px;background:#f3f0ff;border-radius:10px;font-size:1.05rem}
-.cbg-notice{margin-top:28px;padding-top:14px;border-top:1px solid #eee}
-.cbg-notice small{color:#adb5bd;font-size:.78rem}
 /* 본문 섹션 이미지 (R5) */
 .section-image{margin:28px 0}
 .section-image img{display:block;max-width:100%;border-radius:10px;box-shadow:0 4px 14px rgba(0,0,0,.12);margin:0 auto}
