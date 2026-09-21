@@ -7,6 +7,8 @@ description: 네이버 블로그 주기 발행 1사이클(검색수요 조회 �
 
 이 파일은 **실행 규칙**이다. 설계 배경·근거는 `documents/22-naver-publish-runbook.md`(레포), 단계별 (a)/(b)/(c) 분류는 동일 문서 §2를 본다. 여기 있는 명령·게이트는 2026-09-14 실행 1건(logNo `224411764637`)과 그 실측 증거로 검증된 것만 담았다. **명령을 추측으로 바꾸지 마라.**
 
+> **규칙 상수의 단일 출처**: 로봇이 같은 규칙을 코드로 쓴다 — 주간 상한·중복 윈도우·금지 패턴·세션 최소 일수 등은 `src/robot/policies.ts`에 있다. 값이 갈라지면 코드를 고친다(설계 `documents/24-auto-poster-robot-design.md` §5-4). 이 파일의 명령·게이트는 그대로 유지한다.
+
 ## 0. 적용 / 비적용
 
 **적용**: 레포 `/Users/prily/Work/blog-auto-poster`에서 네이버 블로그(`hiteneken`)에 글 **1건**을 공개 발행하는 1사이클.
@@ -208,10 +210,11 @@ comm -13 "data/ops/runs/$RUN_ID/live/logNos-before.txt" "data/ops/runs/$RUN_ID/l
 # S13: 발행물 HTML 기계 점검 (텍스트 판정)
 node scripts/inspect-published-post.mjs <logNo> $BID      # exit 0 = PASS, 1 = FAIL
 
-# S14: 독자 시점 검증 — 모드 플래그(--links/--anon/--compliance)는 한 번에 하나만
+# S14: 독자 시점 검증 — 모드 플래그(--links/--anon/--compliance/--ads)는 한 번에 하나만
 node scripts/verify-reader-view.mjs <logNo> $BID --out "data/ops/runs/$RUN_ID/verify" --json | tee "data/ops/runs/$RUN_ID/verify/$RUN_ID-reader.log"
 node scripts/verify-reader-view.mjs <logNo> $BID --out "data/ops/runs/$RUN_ID/verify" --links | tee "data/ops/runs/$RUN_ID/verify/$RUN_ID-links.log"
 node scripts/verify-reader-view.mjs <logNo> $BID --out "data/ops/runs/$RUN_ID/verify" --compliance "output/posts/<draftId>" | tee "data/ops/runs/$RUN_ID/verify/$RUN_ID-compliance.log"
+node scripts/verify-reader-view.mjs <logNo> $BID --out "data/ops/runs/$RUN_ID/verify" --ads "output/posts/<draftId>" | tee "data/ops/runs/$RUN_ID/verify/$RUN_ID-ads.log"
 
 # S15: 비로그인 열람 가능 여부
 node scripts/verify-reader-view.mjs <logNo> $BID --out "data/ops/runs/$RUN_ID/verify" --anon | tee "data/ops/runs/$RUN_ID/verify/$RUN_ID-anon.log"
@@ -220,11 +223,13 @@ node scripts/verify-reader-view.mjs <logNo> $BID --out "data/ops/runs/$RUN_ID/ve
 node scripts/verify-reader-view.mjs --selftest             # exit 0 = 검출기 정상
 ```
 
-- 종료 코드는 셋 다 동일하다: **0 통과 / 1 실패 / 2 하네스 오류**(인자·의존성·네트워크).
+- 종료 코드는 모든 모드가 같다: **0 통과 / 1 실패 / 2 하네스 오류**(인자·의존성·네트워크).
 - 위 `| tee` 파이프의 종료 코드는 §1의 `set -o pipefail`이 켜져 있을 때 하네스 것이다. 켜지 않았다면 `tee`가 0을 돌려줘 실패가 숨는다 — 파이프 없이 돌려 `$?`를 직접 확인하라.
 - 인자는 순서 무관(`logNo`는 숫자, `blogId`는 아님). `blogId` 생략 시 env → config에서 해석한다.
 - `--out` 기본값은 `.cache/reader-verify`다 — **반드시 `--out`을 증거 패킷으로 지정**해야 증거가 남는다.
 - `--compliance`는 초안 **디렉터리**(`output/posts/<draftId>`, `post.html`+`meta.json` 포함)를 받는다.
+- `--ads`도 초안 **디렉터리**를 받는다(같은 형태). **광고가 실린 발행물은 이 모드가 필수다** — 초안 마커(계획 광고) 수와 발행물 광고 카드 수 일치, 고지가 첫 3블록 안, 랜딩이 쿠팡 상품 페이지인지 본다(설계 `documents/24-auto-poster-robot-design.md` §3-6).
+- `--ads`는 파트너스 클릭 정산 때문에 **광고 링크를 1회만 클릭**한다(PC 뷰포트의 첫 카드 1개 — 설계 §3-7). 검증 목적 외의 광고 클릭·재클릭은 금지한다.
 - 이 스크립트는 익명 임시 컨텍스트만 사용하며 운영 프로필(`data/browser-profiles/naver`)을 열지 않는다(동시 사용 시 세션 파손 방지).
 - 스크립트가 없거나 2(하네스 오류)로 끝나면 **검증을 생략하지 말고** 중단·보고한다.
 
@@ -238,11 +243,12 @@ node scripts/verify-reader-view.mjs --selftest             # exit 0 = 검출기 
 | compliance     | 초안 블록 유실 0, 금지 문구 0, `meta.json` 태그가 발행물에 전부 존재                                                                                                                                                      |
 | links          | 본문 링크 전부 200 + 의도한 목적지                                                                                                                                                                                        |
 | anon           | 인증 쿠키 없음 + 로그인 월 없음                                                                                                                                                                                           |
+| ads            | 초안 마커(계획 광고) 수 == 발행물 광고 카드 수, 고지가 첫 3블록 안, 랜딩이 쿠팡 상품 페이지                                                                                                                                |
 | 증거           | PC·모바일 스크린샷 파일이 `--out` 디렉터리에 생성                                                                                                                                                                         |
 
 ## 10. S16–S17 — 판정과 기록
 
-**검수 완료 = 아래를 전부 만족할 때만이다**: ① `inspect-published-post.mjs` exit 0, ② `verify-reader-view.mjs`를 4회(기본 reader-view · `--links` · `--compliance` · `--anon`) 실행해 **전부 exit 0**, ③ 발행 응답의 `warnings`/`widgetWarnings`가 비어 있음. 그 외에는 `published-with-warnings` 또는 `FAIL`로 기록하고 사람이 판단한다(발행 후 수정 수단이 없으므로 판정만 남긴다).
+**검수 완료 = 아래를 전부 만족할 때만이다**: ① `inspect-published-post.mjs` exit 0, ② `verify-reader-view.mjs`를 5회(기본 reader-view · `--links` · `--compliance` · `--anon` · `--ads`) 실행해 **전부 exit 0** — **광고가 실린 발행물은 `--ads` exit 0이 필수**다(누락 시 검수 완료가 아니다), ③ 발행 응답의 `warnings`/`widgetWarnings`가 비어 있음. 그 외에는 `published-with-warnings` 또는 `FAIL`로 기록하고 사람이 판단한다(발행 후 수정 수단이 없으므로 판정만 남긴다).
 
 증거 패킷(레포 하위, `/tmp` 금지 — 재부팅 시 소실):
 
@@ -255,7 +261,8 @@ data/ops/runs/$RUN_ID/
   draft/            edited.html, publish-preview.html (+.sha256), meta.json
   publish/          response.json  (= 발행 응답 원문)
   verify/           <logNo>-inspector.txt, <runId>-reader.log, <runId>-links.log, <runId>-compliance.log, <runId>-anon.log,
-                    <logNo>-desktop.png, <logNo>-mobile.png (스크린샷은 하네스가 --out에 직접 생성)
+                    <runId>-ads.log (광고가 실린 발행물), <logNo>-desktop.png, <logNo>-mobile.png
+                    (스크린샷은 하네스가 --out에 직접 생성)
 ```
 
 `data/ops/publish-log.jsonl`에 **1줄** 추가한다(append-only):
@@ -293,6 +300,7 @@ data/ops/runs/$RUN_ID/
     "inspector": { "exit": 0 },
     "reader": { "exit": 0, "verdict": "PASS" },
     "anonymous": { "authCookies": [], "loginWall": false },
+    "ads": { "exit": 0 },
     "newLogNos": ["..."]
   },
   "cost": { "imagesUsd": 0.033 },

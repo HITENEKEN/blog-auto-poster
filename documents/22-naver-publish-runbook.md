@@ -2,7 +2,7 @@
 
 > **목적**: 2026-09-14에 1회 성공한 네이버 블로그 발행 사이클(검색수요 조회 → 주제 선정 → 생성·편집 → 공개 발행 → 독자 검증)을 **주기 실행**으로 전환한다. 이 문서는 *왜*와 *배선(wiring)*을 다루고, 실행 계약은 `.omp/skills/naver-blog-cycle/SKILL.md`(이하 **스킬**)가 갖는다.
 > 스킬 파일이 단계·명령·게이트의 단일 출처이며, 이 문서는 그 단계 목록을 재기재하지 않는다.
-> **작성**: 2026-09-15 / **트리거(launchd) 로드**: 미실행 — §3은 설치 절차이며 이 문서 작성 시점에 `launchctl`로 로드하지 않았다.
+> **작성**: 2026-09-15 / **트리거**: §3은 **로봇(PM2 앱 `blog-auto-poster-robot`)으로 대체**됐다. launchd 에이전트는 로드하지 않는다(이중 실행 금지).
 
 ---
 
@@ -39,109 +39,32 @@
 
 ---
 
-## 3. 트리거 설치 (launchd user agent)
+## 3. 트리거 — 로봇으로 대체 (launchd 사용 금지)
 
-**왜 launchd + Aqua 세션인가**: 발행은 Playwright가 `data/browser-profiles/naver`의 **실제 Chrome 프로필**을 열어 NID_AUT 쿠키로 로그인 상태를 유지해야 한다(`src/platforms/naver/NaverBrowserPoster.ts:1190-1240`). 이 프로필은 로그인한 사용자의 GUI 세션에 속하므로, 시스템 데몬·헤드리스 러너가 아니라 **Aqua 세션의 사용자 에이전트**로 돌려야 한다.
+**이 절의 launchd 설치 절차는 폐기됐다.** 주기 실행은 `src/robot/`의 상주 로봇이 담당한다
+(설계 `documents/24-auto-poster-robot-design.md`, 구동법 §7).
 
-`~/Library/LaunchAgents/com.prily.blog-auto-poster-cycle.plist`:
+| 항목 | 값 |
+| --- | --- |
+| 트리거 | PM2 앱 `blog-auto-poster-robot` (`ecosystem.config.cjs`) — 슬롯 기획 월·목 21:00, 발행 화·토 21:10 KST |
+| 깨우기 | `sudo pmset repeat wakeorpoweron MTRS 20:55:00` (Mac이 잠들어 있으면 로봇이 아니라 `pmset`이 깨운다) |
+| 발행 승인 | 대시보드 승인 카드 또는 `npm run robot -- approve <runId>` (`mode: manual`, 120분 제한) |
+| 중복 방지 | `robot.enabled`만 켠다. **launchd 에이전트 `com.prily.blog-auto-poster-cycle`과 로봇을 동시에 켜지 마라** — 같은 사이클이 두 번 돌아 중복 발행된다(스킬 §0 금지: 1사이클 2건 발행) |
 
-```xml
-<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0">
-<dict>
-  <key>Label</key>
-  <string>com.prily.blog-auto-poster-cycle</string>
-
-  <key>ProgramArguments</key>
-  <array>
-    <string>/opt/homebrew/bin/omp</string>
-    <string>-p</string>
-    <string>--cwd</string>
-    <string>/Users/prily/Work/blog-auto-poster</string>
-    <string>--append-system-prompt=/Users/prily/Work/blog-auto-poster/.omp/skills/naver-blog-cycle/SKILL.md</string>
-    <string>--auto-approve</string>
-    <string>--mode=json</string>
-    <string>--max-time=5400</string>
-    <string>skill://naver-blog-cycle 규칙에 따라 네이버 블로그 발행 1사이클을 실행하라.</string>
-  </array>
-
-  <key>WorkingDirectory</key>
-  <string>/Users/prily/Work/blog-auto-poster</string>
-
-  <!-- launchd 기본 PATH는 /usr/bin:/bin:/usr/sbin:/sbin 이라 omp·node를 못 찾는다. 반드시 덮어쓴다. -->
-  <key>EnvironmentVariables</key>
-  <dict>
-    <key>PATH</key>
-    <string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
-    <key>HOME</key>
-    <string>/Users/prily</string>
-  </dict>
-
-  <!-- 주 2회: 화(2)·토(6) 21:10 KST. 0/7=일, 1=월, 2=화 … 6=토 -->
-  <key>StartCalendarInterval</key>
-  <array>
-    <dict>
-      <key>Weekday</key><integer>2</integer>
-      <key>Hour</key><integer>21</integer>
-      <key>Minute</key><integer>10</integer>
-    </dict>
-    <dict>
-      <key>Weekday</key><integer>6</integer>
-      <key>Hour</key><integer>21</integer>
-      <key>Minute</key><integer>10</integer>
-    </dict>
-  </array>
-
-  <key>RunAtLoad</key>
-  <false/>
-
-  <!-- GUI 세션(Aqua)에서만 — 브라우저 프로필 접근에 필요 -->
-  <key>LimitLoadToSessionType</key>
-  <string>Aqua</string>
-
-  <key>StandardOutPath</key>
-  <string>/Users/prily/Work/blog-auto-poster/data/ops/launchd-cycle.log</string>
-  <key>StandardErrorPath</key>
-  <string>/Users/prily/Work/blog-auto-poster/data/ops/launchd-cycle.err.log</string>
-
-  <key>ProcessType</key>
-  <string>Background</string>
-</dict>
-</plist>
-```
-
-위 XML을 **`~/Library/LaunchAgents/com.prily.blog-auto-poster-cycle.plist`로 저장한 뒤** 아래를 실행한다(경로를 바꾸면 `plutil`·`launchctl` 명령의 경로도 함께 바꾼다). launchd는 로그 디렉터리를 만들어 주지 않으므로 0)을 먼저 실행한다.
-
-설치·확인·해제(이 문서 작성 시점에는 **실행하지 않았다**):
+확인·해제:
 
 ```bash
-# 0) 로그 디렉터리 준비 (data/는 gitignore 대상 런타임 경로)
-mkdir -p /Users/prily/Work/blog-auto-poster/data/ops
+# 로봇 사전 점검 — "이중 트리거 없음" 항목이 launchd 에이전트 미로드를 검사한다
+npm run robot -- doctor
 
-# 1) 문법 검사
-plutil -lint ~/Library/LaunchAgents/com.prily.blog-auto-poster-cycle.plist
-
-# 2) 등록 (uid 501 = prily)
-launchctl bootstrap gui/501 ~/Library/LaunchAgents/com.prily.blog-auto-poster-cycle.plist
-
-# 3) 즉시 1회 실행해 드라이런 확인 (-p: 시작한 프로세스 PID 출력)
-launchctl kickstart -p gui/501/com.prily.blog-auto-poster-cycle
-
-# 4) 상태/다음 실행 시각 확인
-launchctl print gui/501/com.prily.blog-auto-poster-cycle
-
-# 5) 해제
-launchctl bootout gui/501/com.prily.blog-auto-poster-cycle
+# 에이전트가 로드돼 있으면 즉시 해제한다(과거 설치분 정리)
+launchctl bootout gui/501/com.prily.blog-auto-poster-cycle 2>/dev/null
+launchctl print gui/501/com.prily.blog-auto-poster-cycle   # non-zero exit = 미로드(정상)
 ```
 
-주의사항:
-
-- `omp` 경로는 Homebrew 심볼릭 링크다(`/opt/homebrew/bin/omp` → `Cellar/omp/18.1.22`). 업그레이드 후에도 심볼릭 링크가 유지되므로 그대로 써도 된다. 버전을 고정하려면 실제 경로로 바꾼다.
-- `-p --auto-approve`는 **무인 실행 전제**다. 승인 프롬프트가 뜨면 세션이 멈추므로 트리거 경로에서는 반드시 붙인다.
-- `--max-time=5400`(90분)은 폭주 방지용 상한이다. 실측 1사이클은 조회부터 검증까지 약 30분(22:17–22:47 KST)이었다.
-- launchd는 GUI 세션이 로그인돼 있을 때만 Aqua 에이전트를 띄운다. 화면 잠금·로그아웃 상태에서는 실행되지 않는다(의도된 동작 — 세션 프로필이 필요하므로).
-- 산출 로그(`data/ops/launchd-cycle*.log`)는 JSON 모드 출력이므로 사람이 읽을 요약은 `data/ops/runs/<runId>/report.md`를 본다.
+- 이전 launchd 방식의 plist 원문·설치 절차는 git 이력에서 볼 수 있다. 이 문서에는 남기지 않는다 —
+  남겨 두면 다시 설치해 로봇과 이중 실행할 위험이 있다.
+- `npm run naver:login`은 여전히 **사람이** 실행한다(2FA). 로봇은 세션이 14일 미만이면 `aborted-session`으로 멈춘다.
 
 ---
 
@@ -204,4 +127,4 @@ launchctl bootout gui/501/com.prily.blog-auto-poster-cycle
 
 ---
 
-_작성일: 2026-09-15 | 실행 계약: `.omp/skills/naver-blog-cycle/SKILL.md` (§3 트리거는 미로드 상태)_
+_작성일: 2026-09-15 | 실행 계약: `.omp/skills/naver-blog-cycle/SKILL.md` | 트리거: 로봇(§3, launchd 미사용)_

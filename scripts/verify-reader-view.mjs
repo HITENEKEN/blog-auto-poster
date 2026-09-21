@@ -12,6 +12,8 @@
  *   - (--links) 본문 링크 목적지를 실제로 따라가 응답/최종 URL/제목 확인 + 본문 이미지 재요청
  *   - (--compliance <draftDir>) 초안 HTML 대비 본문 유실, 금지 문구, 태그 누락 확인
  *   - (--anon) 비로그인 열람 가능 여부(쿠키·로그인 월)
+ *   - (--ads <draftDir>) 자동 광고: 초안 마커 추출 → 익명 브라우저로 광고 링크 랜딩 확인 →
+ *     발행물의 상품 카드가 PC(1280x900)·모바일(390x844)에서 잘리지 않고 뜨는지 확인
  *
  * 안전 규칙:
  *   - Chromium은 레포 자체 의존성(node_modules/playwright)을 쓴다. 절대경로 하드코딩 없음.
@@ -25,6 +27,7 @@
  *   node scripts/verify-reader-view.mjs <logNo> [blogId] --links
  *   node scripts/verify-reader-view.mjs <logNo> [blogId] --compliance <draftDir>
  *   node scripts/verify-reader-view.mjs <logNo> [blogId] --anon
+ *   node scripts/verify-reader-view.mjs <logNo> [blogId] --ads <draftDir>
  *
  * blogId 생략 시 env BLOG_POSTER_PLATFORM_NAVER_BLOG_ID → config/*.yaml
  * (platforms.naver.blogId) 순으로 해석한다(inspect-published-post.mjs와 동일).
@@ -667,7 +670,7 @@ const VIEWPORTS = [
 ];
 
 const probeUrlsFor = (view, blogId, logNo) =>
-  view.name === 'mobile'
+  view.isMobile
     ? [`https://m.blog.naver.com/${blogId}/${logNo}`, `https://blog.naver.com/${blogId}/${logNo}`]
     : [
         `https://blog.naver.com/${blogId}/${logNo}`,
@@ -1398,6 +1401,803 @@ async function runCompliance(draftDir, blogId, logNo, { outDir }) {
   return { failures };
 }
 
+// ----------------------------------------------------------------- mode: ads
+
+// 자동 광고(설계 §3-4~3-6) 판정 상수. URL 기준은 발행 전 게이트(checkAdGate)와 같다.
+const ADS_DISCLOSURE_RE = /쿠팡\s*파트너스\s*활동/;
+const COUPANG_PARTNER_PATH_RE = /^\/a\/[A-Za-z0-9_-]+/;
+const COUPANG_PRODUCT_PATH_RE = /^\/(?:vp\/products|products|np\/products)\//;
+// 쿠팡이 자동 접근을 막거나 오류를 낼 때 보이는 문구.
+const COUPANG_BOT_BLOCK_RE =
+  /로봇이\s*아닙니다|자동\s*입력|비정상적인\s*접근|이용에\s*불편|이용이\s*제한|잠시\s*후\s*다시|Access\s*Denied|captcha|보안\s*문자/i;
+const CLICK_NAV_TIMEOUT_MS = 25_000;
+
+/** 광고 카드 확인용 뷰포트 — PC 1280x900, 모바일은 기본 모드와 같은 390x844. */
+const ADS_VIEWPORTS = [
+  {
+    name: 'ads-desktop',
+    viewport: { width: 1280, height: 900 },
+    deviceScaleFactor: 1,
+    userAgent: undefined,
+    isMobile: false,
+    hasTouch: false,
+  },
+  { ...VIEWPORTS[1], name: 'ads-mobile' },
+];
+
+const HTML_TAG_RE = /<([a-zA-Z][a-zA-Z0-9:-]*)\b([^>]*)>/g;
+const HTML_ATTR_RE = /([a-zA-Z_:][-a-zA-Z0-9_:.]*)\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s"'>]+))/g;
+
+/** 네이버가 붙이는 추적 파라미터를 떼고 같은 상품 링크로 취급한다. */
+const adUrlKey = (url) => String(url || '').replace(/[?#].*$/, '');
+
+/** 태그 하나의 속성 문자열 → { 이름: 값 } (순수). */
+export function parseHtmlAttributes(raw) {
+  const attrs = {};
+  if (!raw) return attrs;
+  HTML_ATTR_RE.lastIndex = 0;
+  let m;
+  while ((m = HTML_ATTR_RE.exec(raw))) attrs[m[1].toLowerCase()] = m[2] ?? m[3] ?? m[4] ?? '';
+  return attrs;
+}
+
+const decodeEntities = (s) =>
+  s
+    .replace(/&quot;/g, '"')
+    .replace(/&#0?39;/g, "'")
+    .replace(/&nbsp;/g, ' ')
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&amp;/g, '&');
+
+/** `data-widget-props`(encodeURIComponent(JSON.stringify(...))) 1개를 푼다(순수). */
+export function decodeWidgetProps(raw) {
+  if (!raw) return { props: null, error: 'data-widget-props 없음' };
+  try {
+    const parsed = JSON.parse(decodeURIComponent(decodeEntities(raw.trim())));
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed))
+      return { props: null, error: 'props가 객체가 아니다' };
+    return { props: parsed, error: null };
+  } catch (e) {
+    return { props: null, error: `props 해석 실패: ${String(e.message || e)}` };
+  }
+}
+
+/**
+ * 초안 HTML에서 자동 광고 마커(`data-ad-source="auto"` + `data-coupang-widget`)와
+ * 고지·묶음 리드를 뽑는다(순수 — 네트워크·DOM 없음).
+ *
+ * 반환: { markers, disclosures, bundleLeads, bundleGroups, adCount, error }
+ *   markers: [{ order, index, tag, adId, widgetKind, slotKind, url, text, imageUrl, propsError }]
+ *   bundleGroups: 연속한 bundle 마커 인덱스 묶음(예: [[1, 2]])
+ */
+export function extractAdRecords(html) {
+  const markers = [];
+  const disclosures = [];
+  const bundleLeads = [];
+  const empty = { markers, disclosures, bundleLeads, bundleGroups: [], adCount: 0 };
+  if (typeof html !== 'string' || html === '') return { ...empty, error: 'HTML이 비어 있다' };
+
+  HTML_TAG_RE.lastIndex = 0;
+  let order = 0;
+  let m;
+  while ((m = HTML_TAG_RE.exec(html))) {
+    order += 1;
+    const tag = m[1].toLowerCase();
+    const attrs = parseHtmlAttributes(m[2]);
+    if (attrs['data-ad-source'] !== 'auto') continue;
+    // 마커는 빈 요소라 텍스트가 없다. 고지·리드 문단만 닫는 태그까지 잘라 텍스트를 본다.
+    const innerText = () => {
+      const start = m.index + m[0].length;
+      const close = html.toLowerCase().indexOf(`</${tag}>`, start);
+      const slice = close === -1 ? '' : html.slice(start, close);
+      return norm(decodeEntities(slice.replace(/<[^>]*>/g, ' ')));
+    };
+    if (attrs['data-coupang-widget']) {
+      const { props, error } = decodeWidgetProps(attrs['data-widget-props']);
+      const pick = (...keys) => {
+        for (const key of keys) {
+          const value = props?.[key];
+          if (typeof value === 'string' && value.trim() !== '') return value.trim();
+        }
+        return null;
+      };
+      markers.push({
+        order,
+        index: markers.length,
+        tag,
+        adId: attrs['data-ad-id'] || null,
+        widgetKind: attrs['data-coupang-widget'],
+        slotKind: (attrs['data-ad-slot-kind'] || '').toLowerCase() || null,
+        url: pick('url'),
+        text: pick('text', 'productName', 'title'),
+        imageUrl: pick('imageUrl', 'image'),
+        propsError: error,
+      });
+      continue;
+    }
+    if (attrs['data-ad-bundle-lead'] !== undefined) {
+      bundleLeads.push({ order, text: innerText() });
+      continue;
+    }
+    if (attrs['data-ad-disclosure'] !== undefined) {
+      const text = innerText();
+      disclosures.push({ order, text, isDisclosure: ADS_DISCLOSURE_RE.test(text) });
+    }
+  }
+
+  const bundleGroups = [];
+  for (let i = 0; i < markers.length; i++) {
+    if (markers[i].slotKind !== 'bundle') continue;
+    const last = bundleGroups[bundleGroups.length - 1];
+    if (last && last[last.length - 1] === i - 1) last.push(i);
+    else bundleGroups.push([i]);
+  }
+  return { markers, disclosures, bundleLeads, bundleGroups, adCount: markers.length, error: null };
+}
+
+/** 랜딩 URL이 쿠팡 링크인지 판정한다(순수). */
+export function classifyCoupangUrl(rawUrl) {
+  const out = { ok: false, kind: null, host: null, path: null, reason: null };
+  if (typeof rawUrl !== 'string' || rawUrl.trim() === '') {
+    out.reason = 'URL이 비어 있다';
+    return out;
+  }
+  let url;
+  try {
+    url = new URL(rawUrl.trim());
+  } catch {
+    out.reason = 'URL 형식이 아니다';
+    return out;
+  }
+  out.host = url.hostname.toLowerCase();
+  out.path = url.pathname;
+  if (out.host !== 'coupang.com' && !out.host.endsWith('.coupang.com')) {
+    out.reason = `쿠팡 도메인이 아니다(host=${out.host})`;
+    return out;
+  }
+  if (COUPANG_PARTNER_PATH_RE.test(out.path)) {
+    out.ok = true;
+    out.kind = 'partner-link';
+    return out;
+  }
+  if (COUPANG_PRODUCT_PATH_RE.test(out.path)) {
+    out.ok = true;
+    out.kind = 'product';
+    return out;
+  }
+  out.reason = `쿠팡 상품 경로가 아니다(path=${out.path})`;
+  return out;
+}
+
+/**
+ * 광고 링크를 따라간 결과 페이지가 "쿠팡 상품 페이지"인지 판정한다(순수).
+ * 봇 차단·오류 페이지는 통과시키지 않는다.
+ */
+export function classifyLandingPage({ url, status = null, text = '' }) {
+  const target = classifyCoupangUrl(url);
+  const base = { ok: false, stage: 'url', kind: target.kind, host: target.host, botBlock: false };
+  if (status != null && (status < 200 || status >= 400))
+    return {
+      ...base,
+      reason:
+        status === 403 || status === 429 ? `HTTP ${status}(봇 차단 가능성)` : `HTTP ${status}`,
+    };
+  if (!target.ok) return { ...base, reason: target.reason };
+  const body = norm(text);
+  const botHit = COUPANG_BOT_BLOCK_RE.exec(body);
+  if (botHit)
+    return {
+      ...base,
+      stage: 'page',
+      botBlock: true,
+      reason: `봇 차단/오류 페이지 문구가 보인다("${clip(botHit[0], 30)}")`,
+    };
+  if (body.length < 40)
+    return { ...base, stage: 'page', reason: '페이지 본문이 비어 있다(차단 가능성)' };
+  return { ...base, ok: true, stage: 'page', reason: null };
+}
+
+/**
+ * 상품 카드 1개가 온전히 보이는지 판정한다(순수 — 라이브 실행과 셀프테스트 공용).
+ * card: { url, box:{left,right,width,height}, images:[{src,naturalWidth,status,mimeType,hidden}],
+ *         linkText, linkTextVisible, collapsed }
+ */
+export function evaluateAdCard(card, containerWidth) {
+  const issues = [];
+  const box = card.box || {};
+  const width = Math.round(box.width || 0);
+  const height = Math.round(box.height || 0);
+  if (width <= 0 || height <= 0) issues.push(`카드가 화면에 렌더되지 않았다(${width}x${height})`);
+  if (typeof box.left === 'number' && box.left < -1)
+    issues.push(`카드가 본문 왼쪽으로 잘렸다(left=${Math.round(box.left)}px)`);
+  if (typeof box.right === 'number' && containerWidth > 0 && box.right > containerWidth + 1)
+    issues.push(
+      `카드가 본문 폭을 넘어 잘렸다(right=${Math.round(box.right)}px > 컨테이너 ${containerWidth}px)`,
+    );
+  if (card.collapsed) issues.push('카드가 부모 요소의 overflow에 잘려 일부가 숨겨졌다');
+  for (const image of card.images || []) {
+    if (!image.src) {
+      issues.push('카드 이미지 src가 없다');
+      continue;
+    }
+    if (image.naturalWidth === 0)
+      issues.push(`카드 이미지가 로드되지 않았다(naturalWidth=0) ${clip(image.src, 90)}`);
+    else if (image.status != null && (image.status < 200 || image.status >= 300))
+      issues.push(`카드 이미지 응답 ${image.status} ${clip(image.src, 90)}`);
+    else if (image.mimeType && !/^image\//i.test(image.mimeType))
+      issues.push(`카드 이미지가 ${image.mimeType}로 응답됐다 ${clip(image.src, 90)}`);
+    if (image.hidden) issues.push(`카드 이미지가 숨겨져 있다(0x0) ${clip(image.src, 90)}`);
+  }
+  if (!card.linkTextVisible)
+    issues.push(
+      `카드 링크 텍스트가 보이지 않는다(text=${JSON.stringify(clip(card.linkText || '', 40))})`,
+    );
+  return issues;
+}
+
+/**
+ * 페이지 안에서 실행된다(직렬화 가능해야 함).
+ * 발행물 본문의 쿠팡 카드 앵커를 찾아 "카드" 단위(연속한 같은 URL 앵커 묶음)로 기하 정보를 모은다.
+ * markFirst=true면 초안 광고 URL(expectedKeys)과 같은 카드의 첫 앵커에
+ * data-ads-verify-target="first"를 붙인다(호출부가 클릭에 쓴다).
+ */
+function collectAdCards({ containerSelectors, markFirst, expectedKeys }) {
+  const isCoupangHost = (host) => /(^|\.)coupang\.com$/i.test(host || '');
+  const abs = (href) => {
+    try {
+      return new URL(href, location.href).href;
+    } catch {
+      return null;
+    }
+  };
+  const linkDataLink = (raw) => {
+    if (!raw) return null;
+    const decoded = raw.replace(/&quot;/g, '"');
+    const m = /"link"\s*:\s*"([^"]*)"/i.exec(decoded);
+    return m && m[1] ? m[1] : null;
+  };
+  // 네이버가 붙이는 추적 파라미터를 무시하고 같은 상품으로 묶는다.
+  const keyOf = (url) => url.replace(/[?#].*$/, '');
+
+  let container = null;
+  let containerSelector = null;
+  for (const sel of containerSelectors) {
+    const el = document.querySelector(sel);
+    if (el) {
+      container = el;
+      containerSelector = sel;
+      break;
+    }
+  }
+  if (!container)
+    return { containerFound: false, containerSelector: null, containerClientWidth: 0, cards: [] };
+
+  const containerRect = container.getBoundingClientRect();
+  const rel = (el) => {
+    const r = el.getBoundingClientRect();
+    return {
+      left: Math.round(r.left - containerRect.left),
+      right: Math.round(r.right - containerRect.left),
+      top: Math.round(r.top - containerRect.top),
+      bottom: Math.round(r.bottom - containerRect.top),
+      width: Math.round(r.width),
+      height: Math.round(r.height),
+    };
+  };
+  const visible = (el) => {
+    const r = el.getBoundingClientRect();
+    if (r.width <= 0 || r.height <= 0) return false;
+    const cs = getComputedStyle(el);
+    return cs.display !== 'none' && cs.visibility !== 'hidden' && Number(cs.opacity || 1) > 0;
+  };
+  const clippedByAncestor = (el) => {
+    let parent = el.parentElement;
+    let depth = 0;
+    while (parent && parent !== container.parentElement && depth < 8) {
+      const cs = getComputedStyle(parent);
+      if (/hidden|clip/.test(cs.overflowY) && parent.scrollHeight > parent.clientHeight + 1)
+        return true;
+      parent = parent.parentElement;
+      depth += 1;
+    }
+    return false;
+  };
+
+  const anchors = [];
+  for (const a of container.querySelectorAll('a')) {
+    const href = (a.getAttribute('href') || '').trim();
+    const wrapper =
+      a.hasAttribute('data-linkdata') ||
+      a.classList.contains('__se_image_link') ||
+      a.querySelector('img') !== null;
+    const fromLinkData = wrapper ? linkDataLink(a.getAttribute('data-linkdata')) : null;
+    const raw = wrapper ? fromLinkData || href : href;
+    if (!raw || raw === '#' || /^javascript:/i.test(raw)) continue;
+    const url = abs(raw);
+    if (!url) continue;
+    let host = '';
+    try {
+      host = new URL(url).hostname;
+    } catch {
+      host = '';
+    }
+    if (!isCoupangHost(host)) continue;
+    anchors.push({ el: a, url });
+  }
+
+  const cards = [];
+  for (const anchor of anchors) {
+    const last = cards[cards.length - 1];
+    if (last && last.key === keyOf(anchor.url)) {
+      last.anchors.push(anchor);
+      continue;
+    }
+    cards.push({ key: keyOf(anchor.url), url: anchor.url, anchors: [anchor] });
+  }
+
+  const out = cards.map((card, index) => {
+    const els = card.anchors.map((x) => x.el);
+    const images = [];
+    for (const el of els)
+      for (const img of el.querySelectorAll('img')) if (!images.includes(img)) images.push(img);
+    const boxes = [...new Set([...els, ...images])].map(rel);
+    const box = {
+      left: Math.min(...boxes.map((b) => b.left)),
+      right: Math.max(...boxes.map((b) => b.right)),
+      top: Math.min(...boxes.map((b) => b.top)),
+      bottom: Math.max(...boxes.map((b) => b.bottom)),
+    };
+    box.width = box.right - box.left;
+    box.height = box.bottom - box.top;
+    const imageData = images.map((img) => {
+      const r = img.getBoundingClientRect();
+      return {
+        src: img.currentSrc || img.getAttribute('src') || '',
+        naturalWidth: img.naturalWidth,
+        naturalHeight: img.naturalHeight,
+        complete: img.complete,
+        renderedWidth: Math.round(r.width),
+        renderedHeight: Math.round(r.height),
+        hidden: r.width === 0 && r.height === 0,
+        alt: img.getAttribute('alt') || '',
+      };
+    });
+    const linkTexts = card.anchors.map((x) => ({
+      text: (x.el.innerText || x.el.textContent || '').replace(/\s+/g, ' ').trim(),
+      visible: visible(x.el),
+    }));
+    // SE가 텍스트 앵커를 죽여도 이미지 링크의 alt가 상품명 노릇을 한다.
+    const linkTextVisible =
+      linkTexts.some((t) => t.text !== '' && t.visible) ||
+      imageData.some((im) => im.alt !== '' && !im.hidden);
+    return {
+      index,
+      url: card.url,
+      anchorCount: card.anchors.length,
+      box,
+      images: imageData,
+      linkTexts,
+      linkText: linkTexts
+        .map((t) => t.text)
+        .filter(Boolean)
+        .join(' | '),
+      linkTextVisible,
+      collapsed: els.some(clippedByAncestor),
+    };
+  });
+
+  if (markFirst && anchors.length > 0) {
+    const wanted = expectedKeys || [];
+    const scoped = wanted.length ? anchors.filter((a) => wanted.includes(keyOf(a.url))) : [];
+    const pool = scoped.length ? scoped : anchors;
+    // 클릭 대상은 리더가 글자를 볼 수 있는 앵커가 우선이다(SE 이미지 래퍼는 박스가 비어 있거나
+    // 컨테이너 폭을 다 차지해 클릭 대상으로 부적합하다).
+    const textOf = (a) => (a.el.innerText || a.el.textContent || '').replace(/\s+/g, ' ').trim();
+    const target =
+      pool.find((a) => textOf(a) !== '' && visible(a.el)) ||
+      pool.find((a) => visible(a.el)) ||
+      pool[0];
+    target.el.setAttribute('data-ads-verify-target', 'first');
+  }
+
+  return {
+    containerFound: true,
+    containerSelector,
+    containerClientWidth: container.clientWidth,
+    containerOverflowPx: Math.max(0, container.scrollWidth - container.clientWidth),
+    pageOverflowPx: Math.max(0, document.documentElement.scrollWidth - window.innerWidth),
+    cards: out,
+  };
+}
+
+/** 광고 링크 1개를 익명 페이지에서 따라가 최종 랜딩을 판정한다(파트너스 클릭 집계 때문에 1회만). */
+async function checkAdLanding(page, marker) {
+  const check = {
+    index: marker.index,
+    adId: marker.adId,
+    requestedUrl: marker.url,
+    status: null,
+    finalUrl: null,
+    host: null,
+    kind: null,
+    title: null,
+    ok: false,
+    reason: null,
+    documentChain: [],
+  };
+  const chain = [];
+  const onResponse = (r) => {
+    if (r.request().resourceType() === 'document')
+      chain.push(`${r.status()} ${r.url().slice(0, 140)}`);
+  };
+  page.on('response', onResponse);
+  let error = null;
+  try {
+    const resp = await page.goto(marker.url, {
+      waitUntil: 'domcontentloaded',
+      timeout: NAV_TIMEOUT_MS,
+    });
+    check.status = resp ? resp.status() : null;
+    await page.waitForTimeout(1_000);
+  } catch (e) {
+    error = String(e.message || e).split('\n')[0];
+  }
+  page.removeListener('response', onResponse);
+  check.documentChain = chain;
+  check.finalUrl = page.url();
+  check.title = await page.title().catch(() => null);
+  const bodyText = await page
+    .evaluate(() => (document.body ? document.body.innerText.slice(0, 4000) : ''))
+    .catch(() => '');
+  if (error) {
+    check.reason = `접속 실패: ${error}`;
+    return {
+      check,
+      failure: `광고 ${marker.index + 1} 링크 접속 실패: ${marker.url} (${error})`,
+    };
+  }
+  const verdict = classifyLandingPage({
+    url: check.finalUrl,
+    status: check.status,
+    text: `${check.title ?? ''} ${bodyText}`,
+  });
+  check.ok = verdict.ok;
+  check.kind = verdict.kind;
+  check.host = verdict.host;
+  check.reason = verdict.reason;
+  return {
+    check,
+    failure: verdict.ok
+      ? null
+      : `광고 ${marker.index + 1} 랜딩이 쿠팡 상품 페이지가 아니다: ${check.finalUrl} — ${verdict.reason}`,
+    warning:
+      verdict.ok && verdict.kind === 'partner-link'
+        ? `광고 ${marker.index + 1} 최종 URL이 상품 페이지가 아니라 파트너스 단축 링크다: ${check.finalUrl}`
+        : null,
+  };
+}
+
+/**
+ * 자동 광고 검증(설계 §3-4~3-6, 계획 §193).
+ *
+ *   1) 초안 마커·고지·묶음 구조(네트워크 없음)
+ *   2) 익명 컨텍스트에서 광고 링크를 따라가 최종 랜딩이 쿠팡 상품 페이지인지
+ *   3) 발행물(logNo가 있을 때)의 카드가 PC·모바일에서 잘리지 않고 이미지가 뜨는지,
+ *      첫 카드 링크를 실제로 클릭했을 때 쿠팡 상품 페이지로 가는지
+ *
+ * 인프라 문제(브라우저 기동·초안 파일 없음·발행물 미도달)는 throw → exit 2,
+ * 콘텐츠 문제는 failures → exit 1.
+ */
+async function runAds(draftDir, blogId, logNo, { outDir }) {
+  assertEphemeralProfile();
+  const draftHtmlPath = path.join(draftDir, 'post.html');
+  if (!existsSync(draftHtmlPath)) {
+    throw new Error(`초안을 찾지 못했다: ${draftHtmlPath} (--ads <draftDir> 인자 확인)`);
+  }
+  const extracted = extractAdRecords(readFileSync(draftHtmlPath, 'utf-8'));
+  const chromium = loadChromium();
+  mkdirSync(outDir, { recursive: true });
+
+  const failures = [];
+  const warnings = [];
+  const browser = await chromium.launch({ headless: true });
+  try {
+    // ---- 1) 초안 구조
+    const singleCount = extracted.markers.filter((m) => m.slotKind === 'single').length;
+    const bundleCount = extracted.markers.filter((m) => m.slotKind === 'bundle').length;
+    console.log(`[ads] draft        : ${draftHtmlPath}`);
+    console.log(
+      `[ads] markers      : ${extracted.markers.length} (single=${singleCount} bundle=${bundleCount} bundleGroups=${extracted.bundleGroups.length})`,
+    );
+    console.log(
+      `[ads] disclosure   : ${extracted.disclosures.length}건 ${JSON.stringify(extracted.disclosures.map((d) => clip(d.text, 50)))}, bundleLead=${extracted.bundleLeads.length}건`,
+    );
+
+    if (extracted.markers.length === 0) {
+      failures.push('초안에 자동 광고 마커(data-ad-source="auto")가 없다');
+    } else {
+      if (extracted.disclosures.length !== 1)
+        failures.push(
+          `자동 고지가 ${extracted.disclosures.length}건이다(광고가 있으면 정확히 1건이어야 한다)`,
+        );
+      const firstAdOrder = extracted.markers[0].order;
+      if (extracted.disclosures.some((d) => d.order > firstAdOrder))
+        failures.push('자동 고지가 첫 광고 마커보다 뒤에 있다(상단 1회 고지 원칙 위반)');
+      for (const disclosure of extracted.disclosures) {
+        if (!disclosure.isDisclosure)
+          failures.push(`자동 고지 문구가 파트너스 고지가 아니다: ${clip(disclosure.text, 80)}`);
+      }
+      for (const group of extracted.bundleGroups) {
+        if (group.length < 2)
+          failures.push(
+            `묶음(bundle) 광고 ${group[0] + 1}번째가 상품 ${group.length}개뿐이다(2개 이상)`,
+          );
+      }
+      if (extracted.bundleGroups.length > 0 && extracted.bundleLeads.length === 0)
+        failures.push('묶음 광고 앞에 리드 문단(data-ad-bundle-lead)이 없다');
+      for (const marker of extracted.markers) {
+        const label = `광고 ${marker.index + 1}(ad-id=${marker.adId ?? '없음'})`;
+        if (marker.propsError) failures.push(`${label} ${marker.propsError}`);
+        if (!marker.adId) failures.push(`광고 ${marker.index + 1}에 data-ad-id가 없다`);
+        if (marker.slotKind !== 'single' && marker.slotKind !== 'bundle')
+          failures.push(
+            `광고 ${marker.index + 1}의 data-ad-slot-kind가 ${marker.slotKind ?? '없음'}이다(single|bundle)`,
+          );
+        const target = classifyCoupangUrl(marker.url);
+        if (!target.ok)
+          failures.push(
+            `광고 ${marker.index + 1} URL이 쿠팡 링크가 아니다: ${marker.url ?? '없음'} — ${target.reason}`,
+          );
+        if (marker.imageUrl && !/^https:\/\//i.test(marker.imageUrl))
+          failures.push(`광고 ${marker.index + 1} imageUrl이 https가 아니다: ${marker.imageUrl}`);
+      }
+    }
+
+    // ---- 2) 익명 컨텍스트에서 광고 링크 추적(광고 1개당 1회)
+    const adContext = await browser.newContext({
+      viewport: { width: 1280, height: 900 },
+      locale: 'ko-KR',
+      timezoneId: 'Asia/Seoul',
+      extraHTTPHeaders: { 'Accept-Language': 'ko-KR,ko;q=0.9,en;q=0.8' },
+    });
+    const adPage = await adContext.newPage();
+    const cookiesBefore = (await adContext.cookies()).map((c) => c.name);
+    const linkChecks = [];
+    for (const marker of extracted.markers) {
+      if (!classifyCoupangUrl(marker.url).ok) {
+        linkChecks.push({
+          index: marker.index,
+          adId: marker.adId,
+          requestedUrl: marker.url,
+          ok: false,
+          reason: '초안 URL이 쿠팡 링크가 아니다',
+        });
+        continue;
+      }
+      const { check, failure, warning } = await checkAdLanding(adPage, marker);
+      if (failure) failures.push(failure);
+      if (warning) warnings.push(warning);
+      console.log(
+        `[ads] link #${marker.index + 1} ${check.ok ? 'ok  ' : 'FAIL'} ${check.status ?? 'ERR'} ${clip(check.requestedUrl, 60)} -> ${clip(check.finalUrl, 90)} (${check.ok ? check.kind : check.reason})`,
+      );
+      if (check.documentChain.length > 1)
+        console.log(`      chain: ${check.documentChain.join(' -> ')}`);
+      linkChecks.push(check);
+    }
+    const cookiesAfter = (await adContext.cookies()).map((c) => c.name);
+    const authCookies = [...new Set([...cookiesBefore, ...cookiesAfter])].filter((n) =>
+      AUTH_COOKIE_RE.test(n),
+    );
+    if (authCookies.length)
+      failures.push(`익명 컨텍스트에 로그인 쿠키가 생겼다: ${authCookies.join(',')}`);
+
+    // ---- 3) 발행물 카드(PC·모바일) + 첫 카드 클릭
+    const published = [];
+    if (logNo) {
+      for (const view of ADS_VIEWPORTS) {
+        const inspection = await inspectViewport(browser, { blogId, logNo, view, outDir });
+        const { result, context, page, frame } = inspection;
+        if (result.documentStatus !== 200 || !result.bodyContainerFound || !frame) {
+          throw new Error(
+            `발행물을 열지 못했다(logNo=${logNo}, ${view.name}, status=${result.documentStatus}, container=${result.bodyContainerSelector ?? 'none'})`,
+          );
+        }
+        const cards = await frame
+          .evaluate(collectAdCards, {
+            containerSelectors: CONTAINER_SELECTORS,
+            markFirst: view === ADS_VIEWPORTS[0],
+            expectedKeys: extracted.markers.map((m) => adUrlKey(m.url)).filter(Boolean),
+          })
+          .catch((e) => ({
+            containerFound: false,
+            containerSelector: null,
+            containerClientWidth: 0,
+            cards: [],
+            error: String(e.message || e),
+          }));
+        // 카드 이미지의 실제 응답(상태·MIME)은 CDP 캡처에서 가져온다.
+        const imageBySrc = new Map();
+        for (const r of result.imageResponses) {
+          imageBySrc.set(r.url, r);
+          imageBySrc.set(r.url.split('?')[0], r);
+        }
+        const viewFailures = [];
+        const viewCards = [];
+        for (const card of cards.cards ?? []) {
+          const images = (card.images ?? []).map((im) => {
+            const rec = imageBySrc.get(im.src) || imageBySrc.get(im.src.split('?')[0]);
+            return rec
+              ? { ...im, status: rec.status, mimeType: rec.mimeType, failed: rec.failed }
+              : { ...im, status: null, mimeType: null, failed: null };
+          });
+          const full = { ...card, images };
+          const issues = evaluateAdCard(full, cards.containerClientWidth ?? 0);
+          for (const issue of issues) viewFailures.push(`${issue} — ${clip(card.url, 90)}`);
+          viewCards.push({ ...full, issues });
+          console.log(
+            `[ads] ${view.name} card#${card.index + 1} ${card.box.width}x${card.box.height}px imgs=${images.length} anchors=${card.anchorCount} linkText=${card.linkTextVisible} -> ${issues.length ? `FAIL(${issues.length})` : 'ok'}`,
+          );
+        }
+        const publishedKeys = new Set((cards.cards ?? []).map((c) => adUrlKey(c.url)));
+        const markerKeys = new Set(extracted.markers.map((m) => adUrlKey(m.url)).filter(Boolean));
+        const missingCards = extracted.markers.filter(
+          (m) => adUrlKey(m.url) && !publishedKeys.has(adUrlKey(m.url)),
+        );
+        const foreignCards = (cards.cards ?? []).filter((c) => !markerKeys.has(adUrlKey(c.url)));
+        if ((cards.cards ?? []).length === 0 && extracted.markers.length > 0) {
+          viewFailures.push(
+            `발행물 본문에서 쿠팡 카드 링크를 찾지 못했다(container=${cards.containerSelector ?? 'none'}${cards.error ? `, ${cards.error}` : ''})`,
+          );
+        }
+        for (const marker of missingCards) {
+          viewFailures.push(
+            `발행물에서 초안 광고 ${marker.index + 1}(${clip(marker.text || marker.adId || '상품명 없음', 30)})의 카드를 찾지 못했다: ${marker.url}`,
+          );
+        }
+        // 초안 자동 광고가 아닌 쿠팡 카드(수동 위젯·배너)는 정상이므로 정보로만 남긴다.
+        console.log(
+          `[ads] ${view.name} match : 초안 광고 ${extracted.markers.length}개 중 ${extracted.markers.length - missingCards.length}개 카드 확인, 자동 광고 외 쿠팡 카드 ${foreignCards.length}개`,
+        );
+        if ((cards.containerOverflowPx ?? 0) > 1)
+          viewFailures.push(`본문 컨테이너가 가로로 ${cards.containerOverflowPx}px 넘친다`);
+        if ((cards.pageOverflowPx ?? 0) > 1)
+          viewFailures.push(`페이지가 가로로 스크롤된다(${cards.pageOverflowPx}px)`);
+
+        // 첫 카드 링크를 실제로 클릭해 최종 도착지까지 확인한다(설계 §3-7: 클릭은 1회).
+        let clickThrough = null;
+        if (view === ADS_VIEWPORTS[0] && (cards.cards ?? []).length > 0) {
+          const popupPromise = context
+            .waitForEvent('page', { timeout: CLICK_NAV_TIMEOUT_MS })
+            .catch(() => null);
+          const selector = '[data-ads-verify-target="first"]';
+          let clickError = null;
+          let domClick = false;
+          try {
+            await frame.click(selector, { timeout: 8_000 });
+          } catch (firstError) {
+            // Playwright는 "보이지 않는" 요소(0 높이 인라인 앵커 등)를 클릭하지 않는다.
+            // 앵커의 기본 동작(새 창 열기)을 그대로 실행하는 DOM 클릭으로 한 번 더 시도한다.
+            const handle = await frame.$(selector).catch(() => null);
+            try {
+              if (!handle) throw firstError;
+              await handle.evaluate((el) => el.click());
+              domClick = true;
+            } catch (secondError) {
+              clickError = String(secondError.message || secondError).split('\n')[0];
+            }
+          }
+          const popup = clickError ? null : await popupPromise;
+          await page.waitForTimeout(1_500);
+          if (popup)
+            await popup
+              .waitForLoadState('domcontentloaded', { timeout: NAV_TIMEOUT_MS })
+              .catch(() => {});
+          const candidates = [popup?.url(), frame.url(), page.url()].filter(Boolean);
+          const landingUrl = candidates.find((u) => classifyCoupangUrl(u).ok) ?? page.url();
+          const landingTarget = popup ?? (classifyCoupangUrl(frame.url()).ok ? frame : page);
+          const landingTitle = await landingTarget.title().catch(() => null);
+          const landingText = await landingTarget
+            .evaluate(() => (document.body ? document.body.innerText.slice(0, 4000) : ''))
+            .catch(() => '');
+          const verdict = classifyLandingPage({
+            url: landingUrl,
+            status: null,
+            text: `${landingTitle ?? ''} ${landingText}`,
+          });
+          clickThrough = {
+            clickedSelector: selector,
+            popup: !!popup,
+            domClick,
+            candidates,
+            landingUrl,
+            title: landingTitle,
+            kind: verdict.kind,
+            host: verdict.host,
+            ok: verdict.ok,
+            reason: verdict.reason,
+          };
+          if (clickError) {
+            clickThrough.reason = clickError;
+            viewFailures.push(`첫 카드 링크 클릭 실패: ${clickError}`);
+          } else if (!verdict.ok) {
+            viewFailures.push(
+              /blog\.naver\.com/i.test(new URL(landingUrl).hostname)
+                ? `첫 카드 링크를 클릭해도 쿠팡으로 이동하지 않았다(최종 URL=${landingUrl})`
+                : `첫 카드 링크의 최종 랜딩이 쿠팡 상품 페이지가 아니다: ${landingUrl} — ${verdict.reason}`,
+            );
+          }
+          console.log(
+            `[ads] ${view.name} click : ${clickThrough.ok ? 'ok  ' : 'FAIL'} popup=${clickThrough.popup} domClick=${clickThrough.domClick} ${clip(landingUrl, 100)} (${verdict.ok ? verdict.kind : verdict.reason})`,
+          );
+        }
+
+        for (const f of viewFailures) failures.push(`[${view.name}] ${f}`);
+        published.push({
+          view: view.name,
+          viewport: `${view.viewport.width}x${view.viewport.height}`,
+          chosenUrl: result.chosenUrl,
+          finalUrl: result.finalUrl,
+          documentStatus: result.documentStatus,
+          containerSelector: result.bodyContainerSelector,
+          containerClientWidth: cards.containerClientWidth ?? null,
+          containerOverflowPx: cards.containerOverflowPx ?? null,
+          pageOverflowPx: cards.pageOverflowPx ?? null,
+          publishedCardCount: (cards.cards ?? []).length,
+          matchedAds: extracted.markers.length - missingCards.length,
+          missingAdCards: missingCards.map((m) => m.url),
+          foreignCards: foreignCards.map((c) => c.url),
+          cards: viewCards,
+          clickThrough,
+          screenshot: result.screenshot,
+          documentFailures: result.failures,
+          failures: viewFailures,
+        });
+        await context.close();
+      }
+    } else {
+      console.log(
+        '[ads] published    : logNo 없음 — 발행물 카드·클릭 검사는 건너뛴다(초안 링크만 검사)',
+      );
+    }
+
+    const report = {
+      blogId: blogId || null,
+      logNo: logNo || null,
+      mode: 'ads',
+      draftDir,
+      draftHtmlPath,
+      generatedAt: new Date().toISOString(),
+      overallVerdict: failures.length ? 'FAIL' : 'PASS',
+      draft: {
+        markers: extracted.markers.length,
+        single: singleCount,
+        bundle: bundleCount,
+        bundleGroups: extracted.bundleGroups,
+        bundleLeads: extracted.bundleLeads,
+        disclosures: extracted.disclosures,
+        error: extracted.error,
+        ads: extracted.markers,
+      },
+      anonymity: { cookiesBefore, cookiesAfter, authCookies },
+      linkChecks,
+      published,
+      warnings,
+      failures,
+    };
+    const reportPath = path.join(outDir, `${logNo || path.basename(draftDir) || 'draft'}-ads.json`);
+    writeFileSync(reportPath, JSON.stringify(report, null, 2));
+    console.log(`[ads] report       : ${reportPath}`);
+    console.log(`verdict: ${failures.length ? 'FAIL' : 'PASS'}`);
+    for (const f of failures) console.log(`  - ${f}`);
+    console.log('\n--- JSON SUMMARY ---');
+    console.log(JSON.stringify(report));
+    return { failures };
+  } finally {
+    await browser.close().catch(() => {});
+  }
+}
+
 // ----------------------------------------------------------------- self-test
 
 const FIXTURE = `<!doctype html><html lang="ko"><head><meta charset="utf-8"><title>fixture</title>
@@ -1424,6 +2224,28 @@ const FIXTURE = `<!doctype html><html lang="ko"><head><meta charset="utf-8"><tit
   </div></div></div></div>
   <div class="se-component se-text se-l-default"><div class="se-component-content"><p>이미지 영역: 존재하지 않는 이미지입니다</p></div></div>
 </div></div></body></html>`;
+
+// --ads 셀프테스트용 합성 초안: 단일 1개 + 묶음 2개 + 상단 고지(설계 §3-4~3-5 마커 그대로).
+const encProps = (props) => encodeURIComponent(JSON.stringify(props));
+const ADS_FIXTURE = `<div class="se-main-container">
+<p data-ad-source="auto" data-ad-disclosure="true" style="font-size:12px">이 포스팅은 쿠팡 파트너스 활동의 일환으로, 이에 따른 일정액의 수수료를 제공받습니다.</p>
+<h2>섹션 하나</h2>
+<div data-coupang-widget="product-link" data-ad-source="auto" data-ad-id="ad-1760000000000-ab12cd" data-ad-slot-kind="single" data-widget-props="${encProps({ url: 'https://link.coupang.com/a/AAA111', text: '상품명 A', imageUrl: 'https://image8.coupangcdn.com/a.jpg' })}"></div>
+<h2>섹션 둘</h2>
+<p data-ad-source="auto" data-ad-bundle-lead="true">함께 비교해 볼 만한 상품</p>
+<div data-coupang-widget="product-link" data-ad-source="auto" data-ad-id="ad-1760000000001-bc23de" data-ad-slot-kind="bundle" data-widget-props="${encProps({ url: 'https://link.coupang.com/a/BBB222', text: '상품명 B', imageUrl: 'https://image8.coupangcdn.com/b.jpg' })}"></div>
+<div data-coupang-widget="product-link" data-ad-source="auto" data-ad-id="ad-1760000000002-cd34ef" data-ad-slot-kind="bundle" data-widget-props="${encProps({ url: 'https://link.coupang.com/a/CCC333', text: '상품명 C' })}"></div>
+</div>`;
+
+// --ads 셀프테스트용 카드 픽스처: 정상 카드 · 폭 초과+깨진 이미지 카드 · 0 높이 이미지 래퍼 카드.
+const CARD_GIF = 'data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7';
+const ADS_CARD_FIXTURE = `<!doctype html><html lang="ko"><head><meta charset="utf-8"><title>ads cards</title>
+<style>body{margin:0}.se-main-container{width:600px}</style></head><body>
+<div class="se-main-container">
+  <p><a href="https://link.coupang.com/a/GOOD1">상품명 좋은 카드</a></p>
+  <p><a href="https://link.coupang.com/a/BAD2"><img src="http://127.0.0.1:9/broken.png" width="900" height="80" alt=""></a></p>
+  <p><a href="#" class="__se_image_link" data-linkdata="{&quot;id&quot;:&quot;SE-9&quot;,&quot;linkUse&quot;:true,&quot;link&quot;:&quot;https://link.coupang.com/a/WRAP3&quot;}"><img src="${CARD_GIF}" width="40" height="40" alt="래퍼 상품" style="display:block"></a><a href="https://link.coupang.com/a/WRAP3">래퍼 상품 보기</a></p>
+</div></body></html>`;
 
 async function runSelfTest() {
   const chromium = loadChromium();
@@ -1522,6 +2344,154 @@ async function runSelfTest() {
     JSON.stringify(failures, null, 1),
   );
 
+  // ---- --ads 모드 순수 헬퍼(네트워크 없음)
+  const ads = extractAdRecords(ADS_FIXTURE);
+  check(
+    'ads: 3 markers extracted (1 single + 2 bundle)',
+    ads.markers.length === 3 &&
+      ads.markers.map((m) => m.slotKind).join(',') === 'single,bundle,bundle',
+    JSON.stringify(ads.markers.map((m) => m.slotKind)),
+  );
+  check(
+    'ads: urls/texts/imageUrls decoded from data-widget-props',
+    ads.markers[0].url === 'https://link.coupang.com/a/AAA111' &&
+      ads.markers[0].text === '상품명 A' &&
+      ads.markers[1].text === '상품명 B' &&
+      ads.markers[1].imageUrl === 'https://image8.coupangcdn.com/b.jpg' &&
+      ads.markers[2].imageUrl === null,
+    JSON.stringify(ads.markers.map((m) => [m.url, m.text, m.imageUrl, m.propsError])),
+  );
+  check(
+    'ads: ad ids, bundle lead, bundle group and disclosure detected',
+    ads.markers[0].adId === 'ad-1760000000000-ab12cd' &&
+      ads.bundleLeads.length === 1 &&
+      ads.bundleLeads[0].text === '함께 비교해 볼 만한 상품' &&
+      ads.bundleGroups.length === 1 &&
+      ads.bundleGroups[0].join(',') === '1,2' &&
+      ads.disclosures.length === 1 &&
+      ads.disclosures[0].isDisclosure === true,
+    JSON.stringify({
+      ids: ads.markers.map((m) => m.adId),
+      leads: ads.bundleLeads,
+      groups: ads.bundleGroups,
+      disclosures: ads.disclosures,
+    }),
+  );
+  const landings = {
+    product: classifyCoupangUrl('https://www.coupang.com/vp/products/123'),
+    partner: classifyCoupangUrl('https://link.coupang.com/a/abc'),
+    offsite: classifyCoupangUrl('https://example.com/x'),
+    home: classifyCoupangUrl('https://www.coupang.com/'),
+  };
+  check(
+    'ads: URL classifier accepts coupang product + partner links, rejects off-site/home',
+    landings.product.ok &&
+      landings.product.kind === 'product' &&
+      landings.partner.ok &&
+      landings.partner.kind === 'partner-link' &&
+      !landings.offsite.ok &&
+      !landings.home.ok,
+    JSON.stringify(landings),
+  );
+  const botPage = classifyLandingPage({
+    url: 'https://www.coupang.com/vp/products/123',
+    status: 200,
+    text: '로봇이 아닙니다. 자동 입력 방지를 위해 아래 문자를 입력해 주세요. '.repeat(3),
+  });
+  const goodPage = classifyLandingPage({
+    url: 'https://www.coupang.com/vp/products/123',
+    status: 200,
+    text: '상품 상세 페이지. 판매가 12,900원 로켓배송 무료배송 상품평 1,234건 재고 있음',
+  });
+  const errorPage = classifyLandingPage({
+    url: 'https://www.coupang.com/vp/products/123',
+    status: 503,
+    text: 'y'.repeat(200),
+  });
+  check(
+    'ads: bot-block/HTTP-error pages rejected, normal product page accepted',
+    botPage.ok === false &&
+      botPage.botBlock === true &&
+      errorPage.ok === false &&
+      goodPage.ok === true,
+    JSON.stringify({ botPage, errorPage, goodPage }),
+  );
+  const goodCard = {
+    url: 'https://link.coupang.com/a/AAA111',
+    box: { left: 20, right: 660, top: 100, bottom: 420, width: 640, height: 320 },
+    images: [
+      {
+        src: 'https://image8.coupangcdn.com/a.jpg',
+        naturalWidth: 320,
+        naturalHeight: 320,
+        hidden: false,
+        status: 200,
+        mimeType: 'image/jpeg',
+      },
+    ],
+    linkText: '🛒 쿠팡에서 보기',
+    linkTextVisible: true,
+    collapsed: false,
+  };
+  const wideCard = {
+    ...goodCard,
+    box: { left: -10, right: 900, top: 0, bottom: 300, width: 910, height: 300 },
+  };
+  const unloadedCard = { ...goodCard, images: [{ ...goodCard.images[0], naturalWidth: 0 }] };
+  const collapsedCard = { ...goodCard, collapsed: true, linkTextVisible: false, linkText: '' };
+  check(
+    'ads: card verdict passes a normal card',
+    evaluateAdCard(goodCard, 860).length === 0,
+    JSON.stringify(evaluateAdCard(goodCard, 860)),
+  );
+  check(
+    'ads: card verdict flags horizontal clipping + unloaded image + collapsed/invisible link text',
+    evaluateAdCard(wideCard, 860).some((i) => i.includes('잘렸다')) &&
+      evaluateAdCard(unloadedCard, 860).some((i) => i.includes('naturalWidth=0')) &&
+      evaluateAdCard(collapsedCard, 860).some((i) => i.includes('overflow')) &&
+      evaluateAdCard(collapsedCard, 860).some((i) => i.includes('링크 텍스트')),
+    JSON.stringify({
+      wide: evaluateAdCard(wideCard, 860),
+      unloaded: evaluateAdCard(unloadedCard, 860),
+      collapsed: evaluateAdCard(collapsedCard, 860),
+    }),
+  );
+
+  // ---- --ads 카드 수집기(페이지 안에서 실행되는 부분) — 합성 DOM으로 확인
+  await page.setContent(ADS_CARD_FIXTURE, { waitUntil: 'load' });
+  await page.waitForTimeout(500);
+  const collected = await page.evaluate(collectAdCards, {
+    containerSelectors: ['.se-main-container'],
+    markFirst: true,
+    expectedKeys: ['https://link.coupang.com/a/WRAP3'],
+  });
+  const collectedIssues = (collected.cards ?? []).map((card) =>
+    evaluateAdCard(card, collected.containerClientWidth),
+  );
+  const markedText = await page.evaluate(() => {
+    const el = document.querySelector('[data-ads-verify-target="first"]');
+    return el ? el.textContent.trim() : null;
+  });
+  check(
+    'ads: card collector groups 3 coupang cards (data-linkdata wrapper resolved) in a 600px container',
+    (collected.cards ?? []).length === 3 &&
+      collected.containerClientWidth === 600 &&
+      collected.cards[2].anchorCount === 2,
+    JSON.stringify({
+      clientWidth: collected.containerClientWidth,
+      cards: (collected.cards ?? []).map((c) => [c.url, c.anchorCount, c.box.width]),
+    }),
+  );
+  check(
+    'ads: collected cards — normal passes, wide+broken fails, markFirst picks the visible anchor',
+    collectedIssues[0].length === 0 &&
+      collectedIssues[1].some((i) => i.includes('잘렸다')) &&
+      collectedIssues[1].some((i) => i.includes('naturalWidth=0')) &&
+      collectedIssues[2].length === 0 &&
+      markedText === '래퍼 상품 보기',
+    JSON.stringify({ issues: collectedIssues, markedText }),
+  );
+
   console.log('SELF-TEST');
   for (const c of checks)
     console.log(`  ${c.ok ? 'PASS' : 'FAIL'}  ${c.name}${c.ok ? '' : `  -> ${c.detail}`}`);
@@ -1542,6 +2512,7 @@ const USAGE = [
   '  node scripts/verify-reader-view.mjs <logNo> [blogId] --links',
   '  node scripts/verify-reader-view.mjs <logNo> [blogId] --compliance <draftDir>',
   '  node scripts/verify-reader-view.mjs <logNo> [blogId] --anon',
+  '  node scripts/verify-reader-view.mjs [logNo] [blogId] --ads <draftDir>',
 ].join('\n');
 
 function parseArgs(argv) {
@@ -1552,6 +2523,7 @@ function parseArgs(argv) {
     json: false,
     help: false,
     compliance: null,
+    ads: null,
     out: DEFAULT_OUT_DIR,
   };
   const positional = [];
@@ -1569,6 +2541,12 @@ function parseArgs(argv) {
     } else if (a.startsWith('--compliance=')) {
       flags.compliance = a.slice('--compliance='.length);
       consumed.push(flags.compliance);
+    } else if (a === '--ads') {
+      flags.ads = argv[++i] ?? null;
+      consumed.push(flags.ads);
+    } else if (a.startsWith('--ads=')) {
+      flags.ads = a.slice('--ads='.length);
+      consumed.push(flags.ads);
     } else if (a === '--out') {
       flags.out = argv[++i] ?? null;
       consumed.push(flags.out);
@@ -1597,23 +2575,29 @@ async function main() {
     return failures.length ? 1 : 0;
   }
 
-  const modes = [flags.links, flags.anon, !!flags.compliance].filter(Boolean).length;
+  const modes = [flags.links, flags.anon, !!flags.compliance, !!flags.ads].filter(Boolean).length;
   if (modes > 1) {
-    throw new Error('한 번에 하나의 모드만 쓸 수 있다 (--links | --anon | --compliance)');
+    throw new Error('한 번에 하나의 모드만 쓸 수 있다 (--links | --anon | --compliance | --ads)');
   }
-  if (!flags.logNo) {
+  // --ads는 초안만으로도 돌 수 있다(logNo가 있으면 발행물 카드까지 검사).
+  if (!flags.logNo && !flags.ads) {
     console.error(USAGE);
     return 2;
   }
   const blogId =
     flags.blogIdArg || process.env.BLOG_POSTER_PLATFORM_NAVER_BLOG_ID || resolveBlogIdFromConfig();
-  if (!blogId) {
+  if (flags.logNo && !blogId) {
     console.error(
       'blogId를 해석하지 못했다 — 두 번째 인자로 넘기거나 config yaml의 platforms.naver.blogId를 설정하라.',
     );
     return 2;
   }
 
+  if (flags.ads) {
+    const draftDir = path.resolve(flags.ads);
+    const { failures } = await runAds(draftDir, blogId, flags.logNo, { outDir: flags.out });
+    return failures.length ? 1 : 0;
+  }
   if (flags.links) {
     const { failures } = await runLinks(blogId, flags.logNo, { outDir: flags.out });
     return failures.length ? 1 : 0;
