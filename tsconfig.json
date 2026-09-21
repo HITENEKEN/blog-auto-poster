@@ -3,7 +3,7 @@
     "target": "ES2022",
     "module": "NodeNext",
     "moduleResolution": "node16",
-    "lib": ["ES2022"],
+    "lib": ["ES2024"],
     "outDir": "./dist",
     "rootDir": "./src",
     "declaration": true,
@@ -38,6 +38,8 @@
       "@scheduler/*": ["./src/scheduler/*"],
       "@cli/*": ["./src/cli/*"],
       "@platforms": ["./src/platforms/index.ts"],
+      "@intelligence": ["./src/intelligence/index.ts"],
+      "@intelligence/*": ["./src/intelligence/*"],
       "@platforms/*": ["./src/platforms/*"]
     },
     "typeRoots": ["./node_modules/@types", "./src/types"]
@@ -48,6 +50,7 @@
     "src/content/**/*",
     "src/scheduler/**/*",
     "src/cli/**/*",
+    "src/robot/**/*",
     "src/web/server/**/*",
     "src/web/shared/**/*",
     "src/platforms/**/*",

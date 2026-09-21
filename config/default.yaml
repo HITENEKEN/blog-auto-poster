@@ -224,3 +224,32 @@ web:
   rateLimit:
     windowMs: 900000 # 15 minutes
     maxRequests: 100
+
+# 자동 포스터 로봇 (documents/24-auto-poster-robot-design.md §6)
+# enabled: false면 데몬은 떠 있어도 슬롯 실행을 만들지 않는다(명령·CLI는 동작)
+robot:
+  enabled: false
+  mode: 'manual' # manual | auto
+  dbPath: './data/robot.sqlite'
+  apiBase: 'http://127.0.0.1:3002' # env BLOG_POSTER_ROBOT_API_BASE 우선
+  categories: [] # 대상 네이버 쇼핑 cat_id. 소재를 등록한 카테고리만 넣는다
+  slots:
+    plan: [{ day: mon, time: '21:00' }, { day: thu, time: '21:00' }]
+    publish: [{ day: tue, time: '21:10' }, { day: sat, time: '21:10' }]
+  catchUpMinutes: { plan: 600, publish: 110 } # 발행은 21:10-23:00 창(스킬 §11) 안에서만
+  jitterMinutes: 15
+  approvalTimeoutMinutes: 120
+  autoPromoteAfterPasses: 4 # 자동 전환 "권장"만 표시. 실제 전환은 사람이 mode를 바꾼다
+  llm:
+    maxCallsPerRun: 10
+    timeoutSeconds: 120
+  images:
+    review: 'human' # human | vision | drop
+  ads:
+    minAds: 2
+    minBlocks: 2
+    maxBlocks: 4
+    firstAfterSection: 2
+    minSectionGap: 2
+    bundleSize: [2, 3]
+    showPrice: false

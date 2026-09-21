@@ -502,6 +502,24 @@ export class ContentGenerator {
   }
 
   /**
+   * (system, user) 프롬프트를 JSON 모드로 실행하고 파싱한 객체를 반환한다.
+   * 로봇의 Judge(src/robot/Judge.ts)가 쓰는 공개 진입점 — 내부 complete(jsonMode=true)를
+   * 감싼다. 파싱 실패는 throw하며, 호출부(Judge)가 손으로 쓴 검증기로 결과를 좁힌다.
+   */
+  async completeJson(system: string, user: string): Promise<unknown> {
+    const text = await this.complete(system, user, true);
+    const trimmed = (text || '')
+      .trim()
+      .replace(/^```(?:json)?\s*/i, '')
+      .replace(/```\s*$/, '')
+      .trim();
+    if (!trimmed) {
+      throw new Error('LLM이 빈 응답을 반환했습니다');
+    }
+    return JSON.parse(trimmed);
+  }
+
+  /**
    * 현재 블로그 글 HTML과 사용자 요청을 받아 LLM으로 수정된 전체 HTML을 반환한다.
    * 편집 화면 AI 채팅(POST /api/posts/:id/ai-edit)용 — 파일 저장은 호출부가 담당한다.
    * API 키가 없거나 LLM 호출에 실패하면 throw한다(라우트가 500 반환).

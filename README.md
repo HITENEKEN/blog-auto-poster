@@ -109,9 +109,18 @@ npm run cli -- analytics --days=30
 npm run dev:web          # 개발 서버 (프론트: 5173, 백엔드: 3005)
 npm run build --prefix src/web/client  # 프론트엔드 프로덕션 빌드
 
-# 프로덕션 실행 (PM2)
-pm2 start dist/cli/index.js --name "blog-poster-scheduler" -- schedule
-pm2 start dist/web/server/index.js --name "blog-poster-web"
+# 프로덕션 실행 (PM2) — ecosystem.config.cjs가 web + robot 두 앱을 정의한다
+pm2 start ecosystem.config.cjs
+pm2 save                 # 로그인 시 자동 기동 (pm2 startup이 출력하는 sudo 명령 1줄을 사람이 실행)
+
+# 자동 포스터 로봇 (documents/24-auto-poster-robot-design.md §7-3)
+npm run robot -- status                          # 상태 보기(서버 불필요)
+npm run robot -- doctor                          # 사전 점검(설계 §7-1)
+npm run robot -- once --kind plan                # 기획 1회
+npm run robot -- once --kind publish --until GATE  # 게이트까지(드라이런)
+npm run robot -- approve <runId> / reject <runId> --reason "…"
+npm run robot -- pause / resume / cancel <runId> / adopt <runId> <logNo>
+pm2 logs blog-auto-poster-robot --lines 200
 ```
 
 ---
@@ -133,8 +142,29 @@ BLOG_POSTER_AFFILIATES_COUPANG_API_SECRET=xxx
 BLOG_POSTER_PLATFORMS_TISTORY_USERNAME=xxx
 BLOG_POSTER_PLATFORMS_TISTORY_PASSWORD=xxx
 BLOG_POSTER_PLATFORMS_TISTORY_API_KEY=xxx
-BLOG_POSTER_WEB_JWT_SECRET=your-secret-key
 ```
+
+**JWT 비밀값은 env가 아니라 `config/secrets.yaml`에 둡니다.** `BLOG_POSTER_WEB_JWT_SECRET`
+환경변수는 `ConfigManagerImpl.applyEnvOverrides`(`src/core/config.ts`)에 매핑이 없어
+아무 효과가 없습니다(코드 기본값 `change-me-in-production`이 그대로 쓰입니다).
+
+```yaml
+# config/secrets.yaml (gitignore 대상)
+web:
+  jwtSecret: '<openssl rand -hex 32 결과>'   # 로봇 가동 전 필수 교체
+```
+
+관리자 계정은 `.env`(gitignore)로 넘깁니다 — `ecosystem.config.cjs`가 이 파일을 읽어
+web·robot 두 앱에 전달합니다(기본값 `admin`/`changeme`는 그대로 두지 마세요).
+
+```bash
+# .env (gitignore)
+BLOG_POSTER_WEB_ADMIN_USERNAME=<새 계정>
+BLOG_POSTER_WEB_ADMIN_PASSWORD=<새 비밀번호>
+```
+
+호스트 바인딩은 `BLOG_POSTER_WEB_HOST=127.0.0.1`(ecosystem 기본)로 두는 것을 권장합니다 —
+`0.0.0.0`이면 같은 네트워크의 누구나 로그인을 시도할 수 있습니다.
 
 ### 이미지 생성 비용 통제 (#8)
 

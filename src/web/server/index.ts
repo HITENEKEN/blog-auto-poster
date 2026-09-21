@@ -11,7 +11,10 @@ import type {
   SchedulerConfig,
 } from '@core/interfaces';
 import { registerRoutes } from './routes';
+import { registerRobotRoutes, createOpenAdRequestCounter } from './routes/robot';
 import { authMiddleware } from './middleware/auth';
+import Database from 'better-sqlite3';
+import * as fs from 'fs';
 import {
   initShoppingCategoryStore,
   loadShoppingCategoryTreeSnapshot,
@@ -22,6 +25,46 @@ import * as path from 'path';
 import cron from 'node-cron';
 
 const logger = getLogger('web-server');
+
+/** Chrome epoch(1601-01-01 µs) → Unix epoch 변환 상수. 스킬 §2 S0과 같은 환산. */
+const CHROME_EPOCH_OFFSET_SECONDS = 11644473600;
+
+export interface NaverSessionInfo {
+  expiresAt: string | null;
+  daysLeft: number | null;
+}
+
+/**
+ * `/health.services.naverSession` — `data/browser-profiles/naver/Default/Cookies`에서
+ * NID_AUT/NID_SES 만료를 읽는다. NID_AUT이 없으면 `expiresAt: null, daysLeft: null`.
+ */
+export function readNaverSession(cwd: string = process.cwd()): NaverSessionInfo {
+  const cookiePath = path.join(cwd, 'data', 'browser-profiles', 'naver', 'Default', 'Cookies');
+  if (!fs.existsSync(cookiePath)) return { expiresAt: null, daysLeft: null };
+  let db: Database.Database | null = null;
+  try {
+    db = new Database(cookiePath, { readonly: true, fileMustExist: true });
+    const rows = db
+      .prepare(
+        "SELECT name, expires_utc FROM cookies WHERE name IN ('NID_AUT','NID_SES') AND expires_utc > 0",
+      )
+      .all() as Array<{ name: string; expires_utc: number }>;
+    if (!rows.length || !rows.some((r) => r.name === 'NID_AUT')) {
+      return { expiresAt: null, daysLeft: null };
+    }
+    const expiresMs = Math.min(
+      ...rows.map((r) => (r.expires_utc / 1_000_000 - CHROME_EPOCH_OFFSET_SECONDS) * 1000),
+    );
+    const expiresAt = new Date(expiresMs);
+    const daysLeft = Math.floor((expiresMs - Date.now()) / (24 * 60 * 60 * 1000));
+    return { expiresAt: expiresAt.toISOString(), daysLeft };
+  } catch (error) {
+    logger.warn({ error: String(error) }, '네이버 세션 쿠키를 읽지 못했습니다');
+    return { expiresAt: null, daysLeft: null };
+  } finally {
+    db?.close();
+  }
+}
 
 export interface WebServerOptions {
   configDir: string;
@@ -170,6 +213,8 @@ export async function createWebServer(options: WebServerOptions): Promise<Fastif
         platforms: platformStatus,
         jobQueue: jobQueue.getStats(),
         scheduler: scheduler.isRunning() ? 'running' : 'stopped',
+        // 스킬 §2 S0 (2): 운영 프로필 Cookies를 읽기 전용으로 조회한 세션 만료(로봇 PREFLIGHT가 쓴다).
+        naverSession: readNaverSession(),
       },
     };
   });
@@ -186,6 +231,13 @@ export async function createWebServer(options: WebServerOptions): Promise<Fastif
     platformRegistry,
     jobQueue,
     scheduler,
+  });
+
+  // 로봇 라우트(GET /api/robot/status, GET /api/robot/runs/:id, POST /api/robot/commands).
+  // routes/index.ts의 비대화를 피해 별도 파일에서 등록한다(설계 §1).
+  await registerRobotRoutes(app, {
+    configManager,
+    countOpenAdRequests: createOpenAdRequestCounter(),
   });
 
   // Serve SPA for non-API routes

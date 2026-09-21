@@ -9,6 +9,7 @@ const aliases: Record<string, string> = {
   '@scheduler': path.resolve(__dirname, 'src/scheduler'),
   '@cli': path.resolve(__dirname, 'src/cli'),
   '@platforms': path.resolve(__dirname, 'src/platforms'),
+  '@intelligence': path.resolve(__dirname, 'src/intelligence'),
   '@shared': path.resolve(__dirname, 'src/web/shared'),
 };
 

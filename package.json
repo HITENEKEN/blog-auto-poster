@@ -8,6 +8,7 @@
     "build": "tsc",
     "build:platforms": "tsc -p tsconfig.platforms.json",
     "cli": "node -r ./scripts/path-alias.js dist/cli/index.js",
+    "robot": "node -r ./scripts/path-alias.js dist/robot/cli.js",
     "dev": "ts-node -r tsconfig-paths/register src/cli/index.ts",
     "lint": "eslint .",
     "lint:fix": "eslint . --fix",
